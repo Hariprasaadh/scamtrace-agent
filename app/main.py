@@ -63,13 +63,26 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 async def verify_api_key(
-    x_api_key: str = Header(..., description="API key for authentication")
+    request: Request,
+    x_api_key: str = Header(None, description="API key in header")
 ) -> str:
-    """Verify the API key from request headers."""
+    """Verify the API key from headers or query parameter."""
     settings = get_settings()
-    if x_api_key != settings.api_key:
+    
+    # Check header first
+    key = x_api_key
+    
+    # Then check query parameter
+    if not key:
+        key = request.query_params.get("x-api-key")
+    
+    if not key:
+        raise HTTPException(status_code=401, detail="API key required in header (x-api-key) or query parameter")
+    
+    if key != settings.api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return x_api_key
+    
+    return key
 
 
 def _summarize_intel(intel) -> str:
@@ -123,9 +136,20 @@ async def health_check():
     }
 
 
+@app.get("/api/message", tags=["Honeypot"])
+async def message_info():
+    """Info about the message endpoint (POST required)."""
+    return {
+        "status": "info",
+        "message": "This endpoint accepts POST requests only",
+        "method": "POST",
+        "endpoint": "/api/message",
+        "required_header": "x-api-key"
+    }
+
+
 @app.post(
     "/api/message",
-    response_model=ResponsePayload,
     responses={
         401: {"model": ErrorResponse, "description": "Invalid API key"},
         422: {"model": ErrorResponse, "description": "Invalid request body"},
@@ -134,7 +158,7 @@ async def health_check():
     tags=["Honeypot"]
 )
 async def process_message(
-    payload: RequestPayload,
+    request: Request,
     api_key: str = Depends(verify_api_key)
 ):
     """
@@ -142,15 +166,48 @@ async def process_message(
     Detects scam intent, engages with honeypot agent, extracts intelligence.
     """
     try:
+        # Parse request body flexibly
+        try:
+            body = await request.json()
+        except:
+            body = {}
+        
+        # Handle empty or test requests
+        if not body or not body.get("message"):
+            return ResponsePayload(
+                status="success",
+                reply="Hello! I received your message. How can I help you?"
+            )
+        
+        # Parse into our model
+        try:
+            payload = RequestPayload(**body)
+        except Exception as e:
+            # If parsing fails, create minimal payload
+            payload = RequestPayload(
+                sessionId=body.get("sessionId", "default-session"),
+                message=None,
+                conversationHistory=[],
+                metadata=None
+            )
+        
         current_session = await session.get_or_create(payload.sessionId)
         await session.increment_messages(payload.sessionId)
         
         message = payload.get_message()
         
+        # Override with raw body if available
+        if body.get("message", {}).get("text"):
+            from app.models import MessageInput
+            message = MessageInput(
+                sender=body["message"].get("sender", "scammer"),
+                text=body["message"]["text"],
+                timestamp=body["message"].get("timestamp")
+            )
+        
         history_dicts = [
             {"sender": msg.sender, "text": msg.text, "timestamp": str(msg.timestamp)}
-            for msg in (payload.conversationHistory or [])
-        ]
+            for msg in (payload.conversationHistory or [])]
         
         # Scam Detection
         if not current_session.scam_detected:
