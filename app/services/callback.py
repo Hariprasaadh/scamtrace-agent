@@ -120,9 +120,12 @@ def should_send_callback(session: SessionState) -> bool:
     if session.callback_sent:
         return False
     
+    # Send callback if we have intel AND minimum messages exchanged
     if not session.intelligence.is_empty():
-        return True
+        if session.messages_exchanged >= settings.min_messages_for_callback:
+            return True
     
+    # Send callback after max messages without new intel
     if session.messages_since_intel >= settings.max_messages_without_intel:
         return True
     

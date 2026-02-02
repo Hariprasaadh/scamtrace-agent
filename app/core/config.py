@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     rule_low_threshold: float = 0.3
     ml_high_threshold: float = 0.6
     ml_low_threshold: float = 0.4
-    max_messages_without_intel: int = 10
+    max_messages_without_intel: int = 5
+    min_messages_for_callback: int = 3
     
     class Config:
         env_file = ".env"
