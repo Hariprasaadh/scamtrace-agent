@@ -3,22 +3,46 @@ Pydantic models for API request/response and internal data structures.
 """
 
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, Union
+from pydantic import BaseModel, Field, field_validator
 
 
 class MessageInput(BaseModel):
     """Incoming message from scammer or user."""
     sender: str = Field(..., description="'scammer' or 'user'")
     text: str = Field(..., description="Message content")
-    timestamp: datetime = Field(..., description="ISO-8601 timestamp")
+    timestamp: Union[datetime, str] = Field(..., description="ISO-8601 timestamp")
+    
+    @field_validator('timestamp', mode='before')
+    @classmethod
+    def parse_timestamp(cls, v):
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except:
+                return datetime.utcnow()
+        return datetime.utcnow()
 
 
 class ConversationMessage(BaseModel):
     """A message in the conversation history."""
     sender: str
     text: str
-    timestamp: datetime
+    timestamp: Union[datetime, str]
+    
+    @field_validator('timestamp', mode='before')
+    @classmethod
+    def parse_timestamp(cls, v):
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace('Z', '+00:00'))
+            except:
+                return datetime.utcnow()
+        return datetime.utcnow()
 
 
 class Metadata(BaseModel):
@@ -32,7 +56,7 @@ class RequestPayload(BaseModel):
     """Full API request payload."""
     sessionId: str = Field(..., description="Unique session identifier")
     message: MessageInput = Field(..., description="Current incoming message")
-    conversationHistory: list[ConversationMessage] = Field(
+    conversationHistory: Optional[list[ConversationMessage]] = Field(
         default_factory=list,
         description="Previous messages in conversation"
     )

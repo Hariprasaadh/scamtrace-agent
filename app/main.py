@@ -3,8 +3,10 @@ ScamTrace Agent - Main FastAPI Application
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from app.core.config import get_settings
 from app.core import session
@@ -45,6 +47,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors with detailed response."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "error",
+            "message": "Invalid request body",
+            "details": exc.errors()
+        }
+    )
 
 
 async def verify_api_key(
@@ -113,6 +128,7 @@ async def health_check():
     response_model=ResponsePayload,
     responses={
         401: {"model": ErrorResponse, "description": "Invalid API key"},
+        422: {"model": ErrorResponse, "description": "Invalid request body"},
         500: {"model": ErrorResponse, "description": "Internal server error"}
     },
     tags=["Honeypot"]
