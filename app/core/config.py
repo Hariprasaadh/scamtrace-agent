@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     
     api_key: str = "your-secret-api-key"
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "llama-3.1-8b-instant"
     guvi_callback_url: str = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
     session_ttl_minutes: int = 30
     rule_high_threshold: float = 0.8
