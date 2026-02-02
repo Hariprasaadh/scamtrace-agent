@@ -8,10 +8,11 @@ from app.models.schemas import ExtractedIntelligence, ConversationMessage
 
 
 BANK_ACCOUNT_PATTERNS = [
-    re.compile(r'\b\d{9,18}\b'),
     re.compile(r'a/c\s*(?:no\.?|number)?:?\s*(\d{9,18})', re.IGNORECASE),
-    re.compile(r'account\s*(?:no\.?|number)?:?\s*(\d{9,18})', re.IGNORECASE),
+    re.compile(r'account\s*(?:no\.?|number)?[:\s]+(\d{9,18})', re.IGNORECASE),
     re.compile(r'acc\s*(?:no\.?)?:?\s*(\d{9,18})', re.IGNORECASE),
+    re.compile(r'account\s+(?:is\s+)?(\d{11,18})', re.IGNORECASE),
+    re.compile(r'\b(\d{11,18})\b'),
 ]
 
 UPI_PATTERNS = [
@@ -29,6 +30,8 @@ PHONE_PATTERNS = [
 
 URL_PATTERNS = [
     re.compile(r'https?://[^\s<>"{}|\\^\[\]`]+', re.IGNORECASE),
+    re.compile(r'www\.[\w.-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./-]*)?', re.IGNORECASE),
+    re.compile(r'[\w-]+\.(?:com|org|net|in|io)/[\w./-]+', re.IGNORECASE),
     re.compile(r'bit\.ly/\w+', re.IGNORECASE),
     re.compile(r'tinyurl\.com/\w+', re.IGNORECASE),
     re.compile(r't\.co/\w+', re.IGNORECASE),
@@ -49,17 +52,21 @@ SUSPICIOUS_KEYWORDS = [
 ]
 
 
-def _is_valid_bank_account(account: str) -> bool:
+def _is_valid_bank_account(account: str, phone_numbers: list = None) -> bool:
     """Validate if string could be a bank account number."""
     digits = re.sub(r'\D', '', account)
     
-    if not (9 <= len(digits) <= 18):
+    if not (11 <= len(digits) <= 18):
         return False
     if len(set(digits)) == 1:
         return False
-    if digits in '0123456789012345678901234567890':
+    if digits == '0123456789012345678':
         return False
-    if digits.startswith('1234') or digits.startswith('0000'):
+    if digits.startswith('0000'):
+        return False
+    
+    # Don't count phone numbers as bank accounts
+    if phone_numbers and digits[-10:] in phone_numbers:
         return False
     
     return True
@@ -138,19 +145,7 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
     """Extract intelligence from a single message."""
     intel = ExtractedIntelligence()
     
-    for pattern in BANK_ACCOUNT_PATTERNS:
-        matches = pattern.findall(text)
-        for match in matches:
-            account = match if isinstance(match, str) else match[0] if match else None
-            if account and _is_valid_bank_account(account):
-                intel.bankAccounts.append(account)
-    
-    for pattern in UPI_PATTERNS:
-        matches = pattern.findall(text)
-        for match in matches:
-            if _is_valid_upi(match):
-                intel.upiIds.append(match.lower())
-    
+    # Extract phone numbers FIRST
     for pattern in PHONE_PATTERNS:
         matches = pattern.findall(text)
         for match in matches:
@@ -158,17 +153,35 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
             if cleaned and _is_valid_phone(cleaned):
                 intel.phoneNumbers.append(cleaned)
     
+    # Extract bank accounts (excluding phone numbers)
+    for pattern in BANK_ACCOUNT_PATTERNS:
+        matches = pattern.findall(text)
+        for match in matches:
+            account = match if isinstance(match, str) else match[0] if match else None
+            if account and _is_valid_bank_account(account, intel.phoneNumbers):
+                intel.bankAccounts.append(account)
+    
+    # Extract UPI IDs
+    for pattern in UPI_PATTERNS:
+        matches = pattern.findall(text)
+        for match in matches:
+            if _is_valid_upi(match):
+                intel.upiIds.append(match.lower())
+    
+    # Extract URLs/phishing links
     for pattern in URL_PATTERNS:
         matches = pattern.findall(text)
         for match in matches:
             if _is_suspicious_url(match):
                 intel.phishingLinks.append(match)
     
+    # Extract suspicious keywords
     text_lower = text.lower()
     for keyword in SUSPICIOUS_KEYWORDS:
         if keyword in text_lower:
             intel.suspiciousKeywords.append(keyword)
     
+    # Deduplicate
     intel.bankAccounts = list(set(intel.bankAccounts))
     intel.upiIds = list(set(intel.upiIds))
     intel.phoneNumbers = list(set(intel.phoneNumbers))
