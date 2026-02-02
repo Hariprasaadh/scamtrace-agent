@@ -9,13 +9,15 @@ from pydantic import BaseModel, Field, field_validator
 
 class MessageInput(BaseModel):
     """Incoming message from scammer or user."""
-    sender: str = Field(..., description="'scammer' or 'user'")
-    text: str = Field(..., description="Message content")
-    timestamp: Union[datetime, str] = Field(..., description="ISO-8601 timestamp")
+    sender: str = Field(default="scammer", description="'scammer' or 'user'")
+    text: str = Field(default="", description="Message content")
+    timestamp: Optional[Union[datetime, str]] = Field(default=None, description="ISO-8601 timestamp")
     
     @field_validator('timestamp', mode='before')
     @classmethod
     def parse_timestamp(cls, v):
+        if v is None:
+            return datetime.utcnow()
         if isinstance(v, datetime):
             return v
         if isinstance(v, str):
@@ -28,13 +30,15 @@ class MessageInput(BaseModel):
 
 class ConversationMessage(BaseModel):
     """A message in the conversation history."""
-    sender: str
-    text: str
-    timestamp: Union[datetime, str]
+    sender: str = "scammer"
+    text: str = ""
+    timestamp: Optional[Union[datetime, str]] = None
     
     @field_validator('timestamp', mode='before')
     @classmethod
     def parse_timestamp(cls, v):
+        if v is None:
+            return datetime.utcnow()
         if isinstance(v, datetime):
             return v
         if isinstance(v, str):
@@ -54,13 +58,19 @@ class Metadata(BaseModel):
 
 class RequestPayload(BaseModel):
     """Full API request payload."""
-    sessionId: str = Field(..., description="Unique session identifier")
-    message: MessageInput = Field(..., description="Current incoming message")
+    sessionId: str = Field(default="test-session", description="Unique session identifier")
+    message: Optional[MessageInput] = Field(default=None, description="Current incoming message")
     conversationHistory: Optional[list[ConversationMessage]] = Field(
         default_factory=list,
         description="Previous messages in conversation"
     )
     metadata: Optional[Metadata] = Field(None, description="Optional metadata")
+    
+    def get_message(self) -> MessageInput:
+        """Get message with default if none provided."""
+        if self.message is None:
+            return MessageInput(sender="scammer", text="test", timestamp=datetime.utcnow())
+        return self.message
 
 
 class ResponsePayload(BaseModel):

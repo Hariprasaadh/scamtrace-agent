@@ -145,15 +145,17 @@ async def process_message(
         current_session = await session.get_or_create(payload.sessionId)
         await session.increment_messages(payload.sessionId)
         
+        message = payload.get_message()
+        
         history_dicts = [
             {"sender": msg.sender, "text": msg.text, "timestamp": str(msg.timestamp)}
-            for msg in payload.conversationHistory
+            for msg in (payload.conversationHistory or [])
         ]
         
         # Scam Detection
         if not current_session.scam_detected:
             detection_result = await detect(
-                message=payload.message.text,
+                message=message.text,
                 history=history_dicts
             )
             
@@ -175,7 +177,7 @@ async def process_message(
         
         # Generate Response
         if current_session.scam_detected:
-            intel = extractor.extract_from_message(payload.message.text)
+            intel = extractor.extract_from_message(message.text)
             if not intel.is_empty():
                 await session.add_intelligence(payload.sessionId, intel)
                 await session.add_agent_note(
@@ -186,8 +188,8 @@ async def process_message(
             current_session = await session.get(payload.sessionId)
             
             reply = await agent.generate_response(
-                scammer_message=payload.message.text,
-                history=payload.conversationHistory,
+                scammer_message=message.text,
+                history=payload.conversationHistory or [],
                 extracted_intel=current_session.intelligence.model_dump() if current_session else None
             )
             
@@ -198,7 +200,7 @@ async def process_message(
                 if success:
                     await session.mark_callback_sent(payload.sessionId)
         else:
-            reply = _generate_neutral_response(payload.message.text)
+            reply = _generate_neutral_response(message.text)
         
         return ResponsePayload(status="success", reply=reply)
     
