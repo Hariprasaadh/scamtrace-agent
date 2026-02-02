@@ -1,0 +1,20 @@
+# Web framework
+fastapi
+uvicorn[standard]
+
+# HTTP client
+httpx
+
+# LLM
+groq
+
+# ML/NLP
+scikit-learn
+joblib
+
+# Validation
+pydantic
+pydantic-settings
+
+# Environment
+python-dotenv
