@@ -112,21 +112,18 @@ async def send_final_result(session: SessionState, max_retries: int = 3) -> bool
 
 def should_send_callback(session: SessionState) -> bool:
     """Determine if callback should be sent for this session."""
-    settings = get_settings()
-    
     if not session.scam_detected:
         return False
     
     if session.callback_sent:
         return False
     
-    # Send callback if we have intel AND minimum messages exchanged
-    if not session.intelligence.is_empty():
-        if session.messages_exchanged >= settings.min_messages_for_callback:
-            return True
+    # Send callback if we have intel AND minimum 3 messages exchanged
+    if not session.intelligence.is_empty() and session.messages_exchanged >= 3:
+        return True
     
-    # Send callback after max messages without new intel
-    if session.messages_since_intel >= settings.max_messages_without_intel:
+    # Also send after 5+ messages even without new intel
+    if session.messages_exchanged >= 5:
         return True
     
     return False
