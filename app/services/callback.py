@@ -138,12 +138,12 @@ def should_send_callback(session: SessionState) -> bool:
     if session.callback_sent:
         return False
     
-    # Send callback if we have intel AND minimum 3 messages exchanged
-    if not session.intelligence.is_empty() and session.messages_exchanged >= 3:
-        return True
-    
-    # Also send after 5+ messages even without new intel
-    if session.messages_exchanged >= 5:
+    # Send only when we've reached the max conversation cap (e.g. 5 messages).
+    # That way extraction runs on the full history and we don't miss phone/link from later messages.
+    from app.core.config import get_settings
+    settings = get_settings()
+    max_conversations = getattr(settings, "max_conversation_messages", 5)
+    if session.messages_exchanged >= max_conversations:
         return True
     
     return False
