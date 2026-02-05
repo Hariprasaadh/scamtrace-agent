@@ -183,7 +183,7 @@ async def process_message(
         await session.increment_messages(payload.sessionId)
         current_session = await session.get(payload.sessionId)
         settings = get_settings()
-        max_conversations = getattr(settings, "max_conversation_messages", 5)
+        max_conversations = getattr(settings, "max_conversation_messages", 7)
         
         message = payload.get_message()
         
@@ -236,8 +236,14 @@ async def process_message(
                 )
             
             current_session = await session.get(payload.sessionId)
-            if current_session and current_session.messages_exchanged >= max_conversations:
-                reply = "I need to verify this with the bank first. I will get back. Thank you."
+            at_cap = current_session and current_session.messages_exchanged >= max_conversations
+            already_sent_final = current_session and current_session.callback_sent
+            
+            if at_cap:
+                if already_sent_final:
+                    reply = "Thank you."
+                else:
+                    reply = "I need to verify this with the bank first. I will get back. Thank you."
             else:
                 reply = await agent.generate_response(
                     scammer_message=message.text,
@@ -248,7 +254,6 @@ async def process_message(
             await session.append_to_conversation(payload.sessionId, "scammer", message.text)
             await session.append_to_conversation(payload.sessionId, "user", reply)
             
-            # After 5 messages, send callback with final extraction
             current_session = await session.get(payload.sessionId)
             if current_session and callback.should_send_callback(current_session):
                 success = await callback.send_final_result(current_session)

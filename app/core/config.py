@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     ml_low_threshold: float = 0.4
     max_messages_without_intel: int = 5
     min_messages_for_callback: int = 3
-    max_conversation_messages: int = 5   # cap: after this many messages, send closing reply and final extraction
+    max_conversation_messages: int = 7   # cap: after this many messages, send closing reply and final extraction
     
     # LLM context limits (avoid token overflow from long history)
     agent_max_history_messages: int = 10          # max conversation turns sent to honeypot LLM

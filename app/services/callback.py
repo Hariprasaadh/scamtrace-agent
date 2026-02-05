@@ -137,5 +137,5 @@ def should_send_callback(session: SessionState) -> bool:
     if session.callback_sent:
         return False
     from app.core.config import get_settings
-    max_conversations = getattr(get_settings(), "max_conversation_messages", 5)
+    max_conversations = getattr(get_settings(), "max_conversation_messages", 7)
     return session.messages_exchanged >= max_conversations
