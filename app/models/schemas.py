@@ -131,6 +131,8 @@ class SessionState(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     callback_sent: bool = False
+    # Server-side conversation history so the honeypot has memory even if client doesn't send it
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
 
 
 class FinalResultPayload(BaseModel):

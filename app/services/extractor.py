@@ -6,13 +6,19 @@ import re
 from app.models.schemas import ExtractedIntelligence, ConversationMessage
 
 
-# Refined patterns for better precision
+# Refined patterns for better precision (order matters: more specific first)
 BANK_ACCOUNT_PATTERNS = [
-    re.compile(r'a/c\s*(?:no\.?|number)?:?\s*(\d{9,18})', re.IGNORECASE),
-    re.compile(r'account\s*(?:no\.?|number)?[:\s]+(\d{9,18})', re.IGNORECASE),
-    re.compile(r'acc\s*(?:no\.?)?:?\s*(\d{9,18})', re.IGNORECASE),
-    re.compile(r'account\s+(?:is\s+)?(\d{11,18})', re.IGNORECASE),
-    re.compile(r'\b(\d{11,18})\b'), # Standalone long numbers (often accounts)
+    # Explicit "account number" / "account no" with flexible spacing before digits
+    re.compile(r'account\s*(?:no\.?|number)?\s*:?\s*(\d{9,18})\b', re.IGNORECASE),
+    re.compile(r'(?:your|my)\s+account\s*(?:no\.?|number)?\s*:?\s*(\d{9,18})\b', re.IGNORECASE),
+    re.compile(r'(?:confirm|verify|send|share|submit)\s+(?:your\s+)?(?:account\s+)?(?:no\.?|number)?\s*:?\s*(\d{9,18})\b', re.IGNORECASE),
+    re.compile(r'a/c\s*(?:no\.?|number)?\s*:?\s*(\d{9,18})\b', re.IGNORECASE),
+    re.compile(r'acc\s*(?:no\.?)?\s*:?\s*(\d{9,18})\b', re.IGNORECASE),
+    re.compile(r'account\s+(?:is\s+)?(\d{11,18})\b', re.IGNORECASE),
+    # 16-digit is very common for Indian bank accounts
+    re.compile(r'\b(\d{16})\b'),
+    # Other standalone long numbers (12-18 digits; 10 = phone, 11 = ambiguous)
+    re.compile(r'\b(\d{12,18})\b'),
 ]
 
 UPI_PATTERNS = [
@@ -29,11 +35,16 @@ PHONE_PATTERNS = [
 ]
 
 URL_PATTERNS = [
+    # Full URL with scheme (catch everything with https?://)
     re.compile(r'https?://[^\s<>"{}|\\^\[\]`]+', re.IGNORECASE),
-    re.compile(r'www\.[\w.-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./-]*)?', re.IGNORECASE),
-    # Common shorteners and weird TLDs
-    re.compile(r'[\w-]+\.(?:tk|ml|ga|cf|gq|xyz|top|work|click|link|online|live|store|shop)/[\w/-]*', re.IGNORECASE),
-    re.compile(r'(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|rb\.gy|shorturl\.at|x\.co)/[\w-]+', re.IGNORECASE),
+    # www. domain with path
+    re.compile(r'www\.[\w.-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./?#&-]*)?', re.IGNORECASE),
+    # Bare domain with path (no scheme) - e.g. sbi-verify.com/login
+    re.compile(r'(?:[\w-]+\.)*[\w-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./?#&-]*)?', re.IGNORECASE),
+    # Suspicious TLDs (free / often used for phishing)
+    re.compile(r'[\w-]+\.(?:tk|ml|ga|cf|gq|xyz|top|work|click|link|online|live|store|shop)(?:/[\w./?#&-]*)?', re.IGNORECASE),
+    # URL shorteners
+    re.compile(r'(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|rb\.gy|shorturl\.at|x\.co|ow\.ly|buff\.ly|adf\.ly)/[\w.-]+', re.IGNORECASE),
     # IP address URLs
     re.compile(r'https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\S*)?'),
 ]
@@ -60,9 +71,14 @@ SUSPICIOUS_KEYWORDS = [
 ]
 
 
+def _normalize_account(account: str) -> str:
+    """Return digits-only form for consistent storage and dedup."""
+    return re.sub(r'\D', '', account)
+
+
 def _is_valid_bank_account(account: str, phone_numbers: list = None) -> bool:
     """Validate if string could be a bank account number."""
-    digits = re.sub(r'\D', '', account)
+    digits = _normalize_account(account)
     
     if not (9 <= len(digits) <= 18):
         return False
@@ -71,14 +87,19 @@ def _is_valid_bank_account(account: str, phone_numbers: list = None) -> bool:
     if digits == '0123456789012345678':
         return False
     
-    # Don't count phone numbers as bank accounts
-    # Common issue where phone number is detected as account
+    # Don't count actual phone numbers as bank accounts (exact match only)
+    # Do NOT reject a long number just because a 10-digit substring looks like a phone
+    # (e.g. 1234567890123456 ends in 7890123456 - still a valid account number)
     if phone_numbers:
         for p in phone_numbers:
             p_digits = re.sub(r'\D', '', p)
-            if p_digits in digits or digits in p_digits:
+            # Reject only if the full account string is exactly this phone or 91+phone
+            if digits == p_digits:
                 return False
-                
+            if len(p_digits) == 10 and digits == '91' + p_digits:
+                return False
+            if len(digits) == 10 and p_digits == digits:
+                return False
     return True
 
 
@@ -152,20 +173,110 @@ def _is_valid_phone(phone: str) -> bool:
     return True
 
 
+# Domains we never treat as phishing (callbacks, known-good)
+PHISHING_WHITELIST_DOMAINS = frozenset([
+    "guvi.in", "hackathon.guvi.in", "www.guvi.in", "www.hackathon.guvi.in",
+    "localhost", "127.0.0.1", "gov.in", "nic.in",
+])
+
+# TLDs commonly used for phishing / free hosting (high risk)
+PHISHING_RISK_TLDS = frozenset([
+    "tk", "ml", "ga", "cf", "gq", "xyz", "top", "work", "click", "link",
+    "online", "live", "store", "shop", "info", "biz", "site", "tech", "pw",
+])
+
+# URL shorteners (high risk in scam context)
+PHISHING_SHORTENER_DOMAINS = frozenset([
+    "bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd", "rb.gy",
+    "shorturl.at", "x.co", "ow.ly", "buff.ly", "adf.ly",
+])
+
+# Path/query words that strongly suggest phishing
+PHISHING_URL_KEYWORDS = frozenset([
+    "verify", "secure", "login", "signin", "update", "confirm", "validation",
+    "bank", "kyc", "bonus", "claim", "password", "otp", "unblock", "suspend",
+    "reactivate", "account", "secure-login", "verify-account", "update-kyc",
+])
+
+
+def _get_url_domain(url: str) -> str:
+    """Extract lowercase host (domain) from URL for whitelist/risk check."""
+    url_lower = url.lower().strip()
+    # Strip scheme
+    for prefix in ("https://", "http://", "//"):
+        if url_lower.startswith(prefix):
+            url_lower = url_lower[len(prefix):]
+            break
+    # Take up to first / or ?
+    host = url_lower.split("/")[0].split("?")[0]
+    # Remove port if present
+    if ":" in host:
+        host = host.split(":")[0]
+    return host
+
+
 def _is_suspicious_url(url: str) -> bool:
-    """Check if URL is suspicious/potentially phishing."""
-    url_lower = url.lower()
-    
-    # Whitelist some common legit domains if needed, but for now be aggressive
-    
-    if re.search(r'https?://\d+\.\d+\.\d+\.\d+', url):
+    """
+    Judge if a URL is likely phishing. Used in scam context, so we are strict:
+    - Whitelist: known-good domains (e.g. callback URLs) are not flagged.
+    - High risk: IP URLs, shorteners, risky TLDs → phishing.
+    - Path/query contains phishing keywords → phishing.
+    - Otherwise in scam context we still treat as suspicious (any link could be malicious).
+    """
+    if not url or not url.strip():
+        return False
+    url_lower = url.lower().strip()
+    domain = _get_url_domain(url)
+
+    # 1. Whitelist: never flag these
+    if domain in PHISHING_WHITELIST_DOMAINS:
+        return False
+    if domain.endswith(".gov.in") or domain.endswith(".nic.in"):
+        return False
+    for w in PHISHING_WHITELIST_DOMAINS:
+        if domain == w or domain.endswith("." + w):
+            return False
+
+    # 2. IP-based URL → high risk
+    if re.search(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', domain):
         return True
-    
-    suspicious_words = ['verify', 'secure', 'login', 'update', 'confirm', 'bank', 'kyc', 'bonus', 'claim']
-    if any(word in url_lower for word in suspicious_words):
+
+    # 3. URL shortener → high risk in scam context
+    for short in PHISHING_SHORTENER_DOMAINS:
+        if domain == short or domain.endswith("." + short):
+            return True
+
+    # 4. Risky TLD (e.g. .tk, .ga, .xyz) → high risk
+    tld = domain.split(".")[-1] if "." in domain else ""
+    if tld in PHISHING_RISK_TLDS:
         return True
-        
-    return True # In a scam context, almost ANY link is suspicious
+
+    # 5. Path or query contains phishing-style keywords
+    path_query = url_lower
+    for prefix in ("https://", "http://", "//"):
+        if prefix in path_query:
+            idx = path_query.find(prefix)
+            path_query = path_query[idx + len(prefix):]
+            break
+    if "/" in path_query:
+        path_query = path_query[path_query.index("/"):]
+    if any(kw in path_query for kw in PHISHING_URL_KEYWORDS):
+        return True
+
+    # 6. In scam context, any other link is still worth flagging for review
+    return True
+
+
+def _normalize_phishing_url(url: str) -> str:
+    """Normalize URL for dedup: lowercase, strip fragment and trailing slash."""
+    if not url:
+        return ""
+    u = url.strip().lower()
+    # Strip fragment
+    if "#" in u:
+        u = u[: u.index("#")]
+    u = u.rstrip("/")
+    return u
 
 
 def extract_from_message(text: str) -> ExtractedIntelligence:
@@ -180,14 +291,13 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
             if _is_valid_phone(cleaned):
                 intel.phoneNumbers.append(cleaned)
     
-    # 2. BANK ACCOUNTS
+    # 2. BANK ACCOUNTS (normalize to digits-only for consistency)
     for pattern in BANK_ACCOUNT_PATTERNS:
         matches = pattern.findall(text)
         for match in matches:
-            # Handle tuple matches from groups
             account = match if isinstance(match, str) else match[0]
             if account and _is_valid_bank_account(account, intel.phoneNumbers):
-                intel.bankAccounts.append(account)
+                intel.bankAccounts.append(_normalize_account(account))
     
     # 3. UPI IDs
     for pattern in UPI_PATTERNS:
@@ -196,13 +306,12 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
             if _is_valid_upi(match):
                 intel.upiIds.append(match.lower())
     
-    # 4. URLs
+    # 4. URLs (phishing links)
     for pattern in URL_PATTERNS:
         matches = pattern.findall(text)
         for match in matches:
-            # Clean trailing punctuation
-            url = match.rstrip('.,;!?')
-            if _is_suspicious_url(url):
+            url = (match if isinstance(match, str) else match[0]).rstrip('.,;!?')
+            if url and _is_suspicious_url(url):
                 intel.phishingLinks.append(url)
     
     # 5. KEYWORDS
@@ -210,12 +319,31 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
     for keyword in SUSPICIOUS_KEYWORDS:
         if keyword in text_lower:
             intel.suspiciousKeywords.append(keyword)
+    
+    # Remove phone numbers that are substrings of extracted bank accounts (false positives)
+    if intel.bankAccounts:
+        def phone_inside_account(phone: str) -> bool:
+            p_d = re.sub(r'\D', '', phone)
+            for acc in intel.bankAccounts:
+                a_d = _normalize_account(acc)
+                if len(a_d) > 10 and p_d in a_d:
+                    return True
+            return False
+        intel.phoneNumbers = [p for p in intel.phoneNumbers if not phone_inside_account(p)]
             
-    # Deduplicate
+    # Deduplicate (phishing links by normalized URL so https://x.com and https://x.com/ count as one)
+    seen_urls = set()
+    deduped_links = []
+    for link in intel.phishingLinks:
+        norm = _normalize_phishing_url(link)
+        if norm and norm not in seen_urls:
+            seen_urls.add(norm)
+            deduped_links.append(link)
+    intel.phishingLinks = deduped_links
+
     intel.bankAccounts = list(set(intel.bankAccounts))
     intel.upiIds = list(set(intel.upiIds))
     intel.phoneNumbers = list(set(intel.phoneNumbers))
-    intel.phishingLinks = list(set(intel.phishingLinks))
     intel.suspiciousKeywords = list(set(intel.suspiciousKeywords))
     
     return intel

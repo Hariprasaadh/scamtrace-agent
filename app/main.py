@@ -136,18 +136,6 @@ async def health_check():
     }
 
 
-@app.get("/api/message", tags=["Honeypot"])
-async def message_info():
-    """Info about the message endpoint (POST required)."""
-    return {
-        "status": "info",
-        "message": "This endpoint accepts POST requests only",
-        "method": "POST",
-        "endpoint": "/api/message",
-        "required_header": "x-api-key"
-    }
-
-
 @app.post(
     "/api/message",
     responses={
@@ -234,7 +222,9 @@ async def process_message(
         
         # Generate Response
         if current_session.scam_detected:
-            intel = extractor.extract_from_message(message.text)
+            # Extract from full conversation (history + current) so we don't miss intel from earlier messages
+            history = (current_session.conversation_history or []) if current_session else []
+            intel = extractor.extract_from_conversation(history, message.text)
             if not intel.is_empty():
                 await session.add_intelligence(payload.sessionId, intel)
                 await session.add_agent_note(
@@ -243,12 +233,15 @@ async def process_message(
                 )
             
             current_session = await session.get(payload.sessionId)
-            
             reply = await agent.generate_response(
                 scammer_message=message.text,
-                history=payload.conversationHistory or [],
+                history=history,
                 extracted_intel=current_session.intelligence.model_dump() if current_session else None
             )
+            
+            # Persist this turn to session so next request has memory
+            await session.append_to_conversation(payload.sessionId, "scammer", message.text)
+            await session.append_to_conversation(payload.sessionId, "user", reply)
             
             # Check if we should send callback
             current_session = await session.get(payload.sessionId)

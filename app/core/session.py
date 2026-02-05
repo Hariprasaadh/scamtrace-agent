@@ -6,8 +6,11 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 
-from app.models.schemas import SessionState, ExtractedIntelligence, DetectionResult
+from app.models.schemas import SessionState, ExtractedIntelligence, DetectionResult, ConversationMessage
 from app.core.config import get_settings
+
+# Max messages to keep in server-side history (scammer + honeypot pairs)
+CONVERSATION_HISTORY_LIMIT = 30
 
 
 _sessions: dict[str, SessionState] = {}
@@ -149,6 +152,26 @@ async def add_agent_note(session_id: str, note: str) -> Optional[SessionState]:
         session = _sessions.get(session_id)
         if session:
             session.agent_notes.append(note)
+            session.updated_at = datetime.utcnow()
+        return session
+
+
+async def append_to_conversation(
+    session_id: str, sender: str, text: str
+) -> Optional[SessionState]:
+    """Append a message to the session's conversation history (for honeypot memory)."""
+    lock = _get_lock()
+    async with lock:
+        session = _sessions.get(session_id)
+        if session:
+            session.conversation_history.append(
+                ConversationMessage(sender=sender, text=text)
+            )
+            # Keep last N messages to avoid unbounded growth
+            if len(session.conversation_history) > CONVERSATION_HISTORY_LIMIT:
+                session.conversation_history = session.conversation_history[
+                    -CONVERSATION_HISTORY_LIMIT:
+                ]
             session.updated_at = datetime.utcnow()
         return session
 

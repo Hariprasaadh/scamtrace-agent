@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     max_messages_without_intel: int = 5
     min_messages_for_callback: int = 3
     
+    # LLM context limits (avoid token overflow from long history)
+    agent_max_history_messages: int = 10          # max conversation turns sent to honeypot LLM
+    agent_max_message_chars: int = 400            # truncate each history/current message to this
+    agent_max_system_prompt_chars: int = 2500    # cap system prompt (persona + intel + goals)
+    llm_detector_max_history_messages: int = 5   # max turns sent to detection LLM
+    llm_detector_max_message_chars: int = 300   # truncate each history message to this
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

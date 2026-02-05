@@ -76,6 +76,13 @@ def _build_intel_context(intel: dict) -> str:
     return "\n".join(parts) if parts else "None yet"
 
 
+def _truncate(text: str, max_chars: int, suffix: str = "...") -> str:
+    """Truncate text to max_chars to avoid blowing LLM context."""
+    if not text or len(text) <= max_chars:
+        return text or ""
+    return text[: max_chars - len(suffix)].rstrip() + suffix
+
+
 def _clean_response(response: str) -> str:
     """Clean up the LLM response."""
     lines = response.split('\n')
@@ -138,25 +145,29 @@ async def generate_response(
         first_msg = next((m.text for m in history if m.sender == "scammer"), scammer_message)
         persona = get_persona(first_msg)
         
+    max_history = getattr(settings, "agent_max_history_messages", 10)
+    max_msg_chars = getattr(settings, "agent_max_message_chars", 400)
+    max_system_chars = getattr(settings, "agent_max_system_prompt_chars", 2500)
+    
     system_prompt = persona["system_prompt"]
     
     # 2. Add Active Baiting Goals
     if extracted_intel:
-        # Show what we have
         context = _build_intel_context(extracted_intel)
         system_prompt += f"\n\n## ALREADY EXTRACTED (DO NOT ASK FOR THESE AGAIN):\n{context}"
-        
-        # Add new goals
         system_prompt += _build_goal_prompt(extracted_intel)
     
+    system_prompt = _truncate(system_prompt, max_system_chars)
     messages = [{"role": "system", "content": system_prompt}]
     
     if history:
-        for msg in history[-8:]: # Keep context window small/recent
+        for msg in history[-max_history:]:
             role = "assistant" if msg.sender == "user" else "user"
-            messages.append({"role": role, "content": msg.text})
+            content = _truncate(msg.text, max_msg_chars)
+            messages.append({"role": role, "content": content})
     
-    messages.append({"role": "user", "content": scammer_message})
+    current_content = _truncate(scammer_message, max_msg_chars)
+    messages.append({"role": "user", "content": current_content})
     
     try:
         client = _get_client()

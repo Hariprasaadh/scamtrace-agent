@@ -82,21 +82,31 @@ def _parse_response(text: str) -> LLMResult:
     )
 
 
+def _truncate(text: str, max_chars: int, suffix: str = "...") -> str:
+    """Truncate text to avoid blowing LLM context."""
+    if not text or len(text) <= max_chars:
+        return text or ""
+    return text[: max_chars - len(suffix)].rstrip() + suffix
+
+
 async def analyze(message: str, history: list[dict] = None) -> LLMResult:
     """Analyze a message using LLM for scam detection."""
     settings = get_settings()
+    max_history = getattr(settings, "llm_detector_max_history_messages", 5)
+    max_msg_chars = getattr(settings, "llm_detector_max_message_chars", 300)
     
     history_text = "No previous messages."
     if history:
         history_lines = []
-        for msg in history[-5:]:
+        for msg in history[-max_history:]:
             sender = msg.get('sender', 'unknown')
-            text = msg.get('text', '')
+            text = _truncate(msg.get('text', ''), max_msg_chars)
             history_lines.append(f"[{sender}]: {text}")
         history_text = "\n".join(history_lines)
     
+    message_truncated = _truncate(message, max_msg_chars)
     prompt = DETECTION_PROMPT.format(
-        message=message,
+        message=message_truncated,
         history=history_text
     )
     
