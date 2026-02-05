@@ -37,12 +37,12 @@ PHONE_PATTERNS = [
 URL_PATTERNS = [
     # Full URL with scheme (catch everything with https?://)
     re.compile(r'https?://[^\s<>"{}|\\^\[\]`]+', re.IGNORECASE),
-    # www. domain with path
-    re.compile(r'www\.[\w.-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./?#&-]*)?', re.IGNORECASE),
-    # Bare domain with path (no scheme) - e.g. sbi-verify.com/login
-    re.compile(r'(?:[\w-]+\.)*[\w-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./?#&-]*)?', re.IGNORECASE),
+    # www. domain with path (include = for query params)
+    re.compile(r'www\.[\w.-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./?#&=%-]*)?', re.IGNORECASE),
+    # Bare domain with path (no scheme) - e.g. sbi-verify.com/login or securebank.com/verify?acc=...
+    re.compile(r'(?:[\w-]+\.)*[\w-]+\.(?:com|org|net|in|co\.in|io|info|biz|xyz|online|site|tech|link|click|top|work)(?:/[\w./?#&=%-]*)?', re.IGNORECASE),
     # Suspicious TLDs (free / often used for phishing)
-    re.compile(r'[\w-]+\.(?:tk|ml|ga|cf|gq|xyz|top|work|click|link|online|live|store|shop)(?:/[\w./?#&-]*)?', re.IGNORECASE),
+    re.compile(r'[\w-]+\.(?:tk|ml|ga|cf|gq|xyz|top|work|click|link|online|live|store|shop)(?:/[\w./?#&=%-]*)?', re.IGNORECASE),
     # URL shorteners
     re.compile(r'(?:bit\.ly|tinyurl\.com|t\.co|goo\.gl|is\.gd|rb\.gy|shorturl\.at|x\.co|ow\.ly|buff\.ly|adf\.ly)/[\w.-]+', re.IGNORECASE),
     # IP address URLs
@@ -268,7 +268,7 @@ def _is_suspicious_url(url: str) -> bool:
 
 
 def _normalize_phishing_url(url: str) -> str:
-    """Normalize URL for dedup: lowercase, strip fragment and trailing slash."""
+    """Normalize URL for dedup: lowercase, strip fragment and trailing slash, canonical scheme."""
     if not url:
         return ""
     u = url.strip().lower()
@@ -276,6 +276,9 @@ def _normalize_phishing_url(url: str) -> str:
     if "#" in u:
         u = u[: u.index("#")]
     u = u.rstrip("/")
+    # Canonical form: prefer https so "https://x.com/path" and "x.com/path" dedupe to one
+    if u and not u.startswith("http://") and not u.startswith("https://"):
+        u = "https://" + u
     return u
 
 
@@ -331,15 +334,17 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
             return False
         intel.phoneNumbers = [p for p in intel.phoneNumbers if not phone_inside_account(p)]
             
-    # Deduplicate (phishing links by normalized URL so https://x.com and https://x.com/ count as one)
-    seen_urls = set()
-    deduped_links = []
+    # Deduplicate phishing links by normalized URL; prefer the https:// version when same
+    seen_urls = {}  # norm -> link (keep best, prefer https)
     for link in intel.phishingLinks:
         norm = _normalize_phishing_url(link)
-        if norm and norm not in seen_urls:
-            seen_urls.add(norm)
-            deduped_links.append(link)
-    intel.phishingLinks = deduped_links
+        if not norm:
+            continue
+        if norm not in seen_urls:
+            seen_urls[norm] = link
+        elif link.startswith("https://") and not seen_urls[norm].startswith("https://"):
+            seen_urls[norm] = link
+    intel.phishingLinks = list(seen_urls.values())
 
     intel.bankAccounts = list(set(intel.bankAccounts))
     intel.upiIds = list(set(intel.upiIds))

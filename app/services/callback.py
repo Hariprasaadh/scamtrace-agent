@@ -6,7 +6,7 @@ import asyncio
 import httpx
 
 from app.core.config import get_settings
-from app.models.schemas import SessionState, FinalResultPayload
+from app.models.schemas import SessionState, FinalResultPayload, ExtractedIntelligence
 
 
 _client: httpx.AsyncClient = None
@@ -28,50 +28,70 @@ async def close_client() -> None:
         _client = None
 
 
-def _summarize_notes(session: SessionState) -> str:
-    """Create a summary of agent notes."""
-    notes = []
+def _summarize_notes(session: SessionState, intel: ExtractedIntelligence) -> str:
+    """
+    Create a short, natural-language summary for immediate action.
+    Focus on what happened and what was extracted so someone can act on it.
+    """
+    parts = []
     
-    if session.detection_result:
-        notes.append(
-            f"Scam detected via {session.detection_result.tier} "
-            f"(confidence: {session.detection_result.confidence:.2f})"
-        )
-        if session.detection_result.indicators:
-            notes.append(f"Indicators: {', '.join(session.detection_result.indicators[:5])}")
+    # What tactics were used (no need to mention detection tier/confidence)
+    if session.detection_result and session.detection_result.indicators:
+        ind = session.detection_result.indicators[:6]
+        if any("urgency" in i for i in ind) or any("urgent" in i.lower() for i in ind):
+            parts.append("Scammer used urgency tactics (block/suspend/immediate action).")
+        if any("sensitive" in i for i in ind) or any("otp" in i.lower() for i in ind):
+            parts.append("Sensitive data requested (OTP, account number, etc.).")
+        if any("impersonation" in i for i in ind):
+            parts.append("Impersonation of bank/authority.")
+        if any("action_requests" in i for i in ind):
+            parts.append("Payment or data redirection requested.")
     
-    if session.agent_notes:
-        notes.extend(session.agent_notes[-3:])
-    
-    intel = session.intelligence
-    if intel.bankAccounts:
-        notes.append(f"Extracted {len(intel.bankAccounts)} bank account(s)")
-    if intel.upiIds:
-        notes.append(f"Extracted {len(intel.upiIds)} UPI ID(s)")
+    # Extracted intelligence in actionable form (for immediate action)
     if intel.phishingLinks:
-        notes.append(f"Extracted {len(intel.phishingLinks)} phishing link(s)")
+        parts.append("Phishing link(s) shared: " + "; ".join(intel.phishingLinks[:3]) + ".")
+    if intel.upiIds:
+        parts.append("UPI ID(s) for payments: " + ", ".join(intel.upiIds[:5]) + ".")
+    if intel.bankAccounts:
+        parts.append("Bank account(s) mentioned: " + ", ".join(intel.bankAccounts[:5]) + ".")
     if intel.phoneNumbers:
-        notes.append(f"Extracted {len(intel.phoneNumbers)} phone number(s)")
+        parts.append("Contact number(s) shared: " + ", ".join(intel.phoneNumbers[:5]) + ".")
     
-    return " | ".join(notes) if notes else "Engagement completed"
+    return " ".join(parts) if parts else "Engagement completed."
+
+
+def _intel_for_callback(session: SessionState) -> ExtractedIntelligence:
+    """
+    Get extracted intelligence for callback. Re-runs extraction on full
+    conversation history so we don't miss phishing links or UPI from any message.
+    """
+    from app.services.extractor import extract_from_conversation
+    base = ExtractedIntelligence(**session.intelligence.model_dump())
+    history = getattr(session, "conversation_history", None) or []
+    if not history:
+        return base
+    # Final sweep: extract from all scammer messages again and merge
+    combined = extract_from_conversation(history, None)
+    base.merge(combined)
+    return base
 
 
 def _build_payload(session: SessionState) -> FinalResultPayload:
     """Build the callback payload from session state."""
+    intel = _intel_for_callback(session)
     intelligence_dict = {
-        "bankAccounts": session.intelligence.bankAccounts,
-        "upiIds": session.intelligence.upiIds,
-        "phishingLinks": session.intelligence.phishingLinks,
-        "phoneNumbers": session.intelligence.phoneNumbers,
-        "suspiciousKeywords": session.intelligence.suspiciousKeywords
+        "bankAccounts": intel.bankAccounts,
+        "upiIds": intel.upiIds,
+        "phishingLinks": intel.phishingLinks,
+        "phoneNumbers": intel.phoneNumbers,
+        "suspiciousKeywords": intel.suspiciousKeywords
     }
-    
     return FinalResultPayload(
         sessionId=session.session_id,
         scamDetected=session.scam_detected,
         totalMessagesExchanged=session.messages_exchanged,
         extractedIntelligence=intelligence_dict,
-        agentNotes=_summarize_notes(session)
+        agentNotes=_summarize_notes(session, intel)
     )
 
 
