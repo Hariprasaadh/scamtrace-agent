@@ -181,6 +181,9 @@ async def process_message(
         
         current_session = await session.get_or_create(payload.sessionId)
         await session.increment_messages(payload.sessionId)
+        current_session = await session.get(payload.sessionId)  # get updated message count
+        settings = get_settings()
+        max_conversations = getattr(settings, "max_conversation_messages", 5)
         
         message = payload.get_message()
         
@@ -233,11 +236,15 @@ async def process_message(
                 )
             
             current_session = await session.get(payload.sessionId)
-            reply = await agent.generate_response(
-                scammer_message=message.text,
-                history=history,
-                extracted_intel=current_session.intelligence.model_dump() if current_session else None
-            )
+            # Cap conversation at max_conversation_messages (default 5); after that, send closing reply only
+            if current_session and current_session.messages_exchanged >= max_conversations:
+                reply = "I need to verify this with the bank first. I will get back. Thank you."
+            else:
+                reply = await agent.generate_response(
+                    scammer_message=message.text,
+                    history=history,
+                    extracted_intel=current_session.intelligence.model_dump() if current_session else None
+                )
             
             # Persist this turn to session so next request has memory
             await session.append_to_conversation(payload.sessionId, "scammer", message.text)
