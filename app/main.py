@@ -241,7 +241,7 @@ async def process_message(
             
             if at_cap:
                 if already_sent_final:
-                    reply = "Thank you."
+                    reply = "I will verify and get back to you at the earliest."
                 else:
                     reply = "I need to verify this with the bank first. I will get back. Thank you."
             else:
