@@ -131,19 +131,11 @@ async def send_final_result(session: SessionState, max_retries: int = 3) -> bool
 
 
 def should_send_callback(session: SessionState) -> bool:
-    """Determine if callback should be sent for this session."""
+    """Send callback only after max_conversation_messages (5), so we return final extraction once."""
     if not session.scam_detected:
         return False
-    
     if session.callback_sent:
         return False
-    
-    # Send only when we've reached the max conversation cap (e.g. 5 messages).
-    # That way extraction runs on the full history and we don't miss phone/link from later messages.
     from app.core.config import get_settings
-    settings = get_settings()
-    max_conversations = getattr(settings, "max_conversation_messages", 5)
-    if session.messages_exchanged >= max_conversations:
-        return True
-    
-    return False
+    max_conversations = getattr(get_settings(), "max_conversation_messages", 5)
+    return session.messages_exchanged >= max_conversations

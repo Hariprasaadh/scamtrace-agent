@@ -28,12 +28,10 @@ UPI_PATTERNS = [
     re.compile(r'[a-zA-Z0-9._-]+@[a-zA-Z]{3,}', re.IGNORECASE),
 ]
 
-# Allow common dashes: ASCII -, en-dash –, em-dash —, minus − (so "+91–9876543210" matches)
-_PHONE_SEP = r'[-\s\u2013\u2014\u2212]'
 PHONE_PATTERNS = [
-    re.compile(r'(?:\+91|91)?' + _PHONE_SEP + r'?[6-9]\d{9}\b'),
+    re.compile(r'(?:\+91|91)?[-\s]?[6-9]\d{9}\b'),
     re.compile(r'\b[6-9]\d{9}\b'),
-    re.compile(r'\b\d{3}' + _PHONE_SEP + r'?\d{3}' + _PHONE_SEP + r'?\d{4}\b'),  # e.g. 987-654-3210
+    re.compile(r'\b\d{3}[-\s]?\d{3}[-\s]?\d{4}\b'), # Generic format
 ]
 
 URL_PATTERNS = [
