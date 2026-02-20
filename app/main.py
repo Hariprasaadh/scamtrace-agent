@@ -96,6 +96,14 @@ def _summarize_intel(intel) -> str:
         parts.append(f"{len(intel.phishingLinks)} links")
     if intel.phoneNumbers:
         parts.append(f"{len(intel.phoneNumbers)} phones")
+    if intel.emailAddresses:
+        parts.append(f"{len(intel.emailAddresses)} emails")
+    if intel.caseIds:
+        parts.append(f"{len(intel.caseIds)} caseIDs")
+    if intel.policyNumbers:
+        parts.append(f"{len(intel.policyNumbers)} policies")
+    if intel.orderNumbers:
+        parts.append(f"{len(intel.orderNumbers)} orders")
     return ", ".join(parts) if parts else "none"
 
 

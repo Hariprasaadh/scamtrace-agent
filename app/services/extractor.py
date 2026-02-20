@@ -55,6 +55,52 @@ IFSC_PATTERN = re.compile(r'\b[A-Z]{4}0[A-Z0-9]{6}\b')
 # New: PAN Pattern
 PAN_PATTERN = re.compile(r'\b[A-Z]{5}\d{4}[A-Z]\b')
 
+# ---- NEW: Email, Case ID, Policy Number, Order Number extraction ----
+
+EMAIL_PATTERNS = [
+    # Standard email (broad catch-all)
+    re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'),
+]
+
+# Known email providers (for UPI vs email disambiguation)
+KNOWN_EMAIL_DOMAINS = frozenset([
+    'gmail.com', 'yahoo.com', 'yahoo.in', 'hotmail.com', 'outlook.com',
+    'protonmail.com', 'rediffmail.com', 'aol.com', 'icloud.com', 'live.com',
+    'mail.com', 'zoho.com', 'yandex.com', 'tutanota.com', 'pm.me',
+    'fastmail.com', 'gmx.com', 'inbox.com', 'msn.com',
+])
+
+# TLDs that are almost certainly emails, not UPI handles
+EMAIL_TLDS = frozenset([
+    'com', 'in', 'org', 'net', 'co', 'io', 'co.in', 'edu', 'gov',
+    'info', 'biz', 'me', 'us', 'uk', 'de', 'fr', 'au', 'ca', 'jp',
+])
+
+CASE_ID_PATTERNS = [
+    # "Case ID: XYZ-123" / "Ref No. ABC456" / "Reference: #12345" / "Complaint No: C-789"
+    re.compile(r'(?:case|ref(?:erence)?|complaint|ticket|incident|file)\s*(?:id|no\.?|number|num|#)?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{2,20})', re.IGNORECASE),
+    # "FIR No 123/2025" or "FIR: 456"
+    re.compile(r'FIR\s*(?:no\.?|number|#)?\s*[:#]?\s*(\d{1,6}(?:/\d{2,4})?)', re.IGNORECASE),
+    # "ID: SBI-12345" / "Employee ID: EMP001"
+    re.compile(r'(?:employee|emp|staff|officer|agent)?\s*(?:id|ID)\s*[:#\-]?\s*([A-Za-z]{2,6}[\-]?\d{3,10})', re.IGNORECASE),
+]
+
+POLICY_PATTERNS = [
+    # "Policy No: LIC-12345678" / "Policy Number: INS/2025/12345" / "Plan No. P-789"
+    re.compile(r'(?:policy|plan|scheme|insurance|insur)\s*(?:no\.?|number|num|id|#)?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{3,25})', re.IGNORECASE),
+    # "LIC Policy 123456" / "HDFC Life policy 78901234"
+    re.compile(r'(?:LIC|HDFC|SBI|ICICI|Bajaj|Tata|Max|Kotak|Star|Reliance)\s+(?:Life\s+)?(?:policy|plan)\s*(?:no\.?|number)?\s*[:#]?\s*(\d{5,15})', re.IGNORECASE),
+]
+
+ORDER_PATTERNS = [
+    # "Order ID: AMZ-987654" / "Order No. 12345" / "Booking ID: BK-001"
+    re.compile(r'(?:order|booking|transaction|txn|shipment|consignment|tracking)\s*(?:id|no\.?|number|num|ref|#)?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{3,25})', re.IGNORECASE),
+    # "AWB No: 1234567890" / "AWB: RR123456789IN"
+    re.compile(r'AWB\s*(?:no\.?|number|#)?\s*[:#]?\s*([A-Za-z0-9]{6,20})', re.IGNORECASE),
+    # "Invoice No: INV-2025-001"
+    re.compile(r'(?:invoice|receipt)\s*(?:no\.?|number|id|#)?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-/]{3,25})', re.IGNORECASE),
+]
+
 
 SUSPICIOUS_KEYWORDS = [
     "urgent", "immediately", "blocked", "suspended", "verify",
@@ -139,8 +185,51 @@ def _is_valid_upi(upi_id: str) -> bool:
         # We will assume it's an email if the provider is a known email host
         if any(d in upi_id.lower() for d in email_domains):
             return False
+        # Also check if provider part has a TLD-like suffix (e.g. bank.com) → email
+        tld = provider.split('.')[-1].lower() if '.' in provider else ''
+        if tld in ('com', 'in', 'org', 'net', 'co', 'io', 'edu', 'gov', 'info', 'biz', 'me'):
+            return False
 
     return True
+
+
+def _is_valid_email(email: str, upi_ids: list = None) -> bool:
+    """Validate if string is a real email address (not a UPI handle)."""
+    if '@' not in email:
+        return False
+    
+    parts = email.split('@')
+    if len(parts) != 2:
+        return False
+    
+    username, domain = parts
+    if len(username) < 1 or len(domain) < 3:
+        return False
+    
+    # Must have a dot in domain (e.g. gmail.com, not just @paytm)
+    if '.' not in domain:
+        return False
+    
+    tld = domain.split('.')[-1].lower()
+    
+    # Must have a valid-looking TLD
+    if len(tld) < 2:
+        return False
+    
+    # If it's a known email domain, definitely email
+    domain_lower = domain.lower()
+    if domain_lower in KNOWN_EMAIL_DOMAINS:
+        return True
+    
+    # If TLD is email-like (com, in, org, etc.), it's email
+    if tld in EMAIL_TLDS:
+        return True
+    
+    # Conservative: if the same string was detected as UPI, skip it here
+    if upi_ids and email.lower() in [u.lower() for u in upi_ids]:
+        return False
+    
+    return False  # Conservative: only accept clearly email-like strings
 
 
 def _clean_phone(phone: str) -> str:
@@ -323,6 +412,40 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
         if keyword in text_lower:
             intel.suspiciousKeywords.append(keyword)
     
+    # 6. EMAIL ADDRESSES
+    for pattern in EMAIL_PATTERNS:
+        matches = pattern.findall(text)
+        for match in matches:
+            email = match.strip().lower()
+            if _is_valid_email(email, intel.upiIds):
+                intel.emailAddresses.append(email)
+    
+    # 7. CASE / REFERENCE IDs
+    for pattern in CASE_ID_PATTERNS:
+        matches = pattern.findall(text)
+        for match in matches:
+            case_id = match.strip()
+            if len(case_id) >= 3 and not case_id.isdigit():  # Skip pure short numbers
+                intel.caseIds.append(case_id)
+            elif case_id.isdigit() and len(case_id) >= 4:  # Accept longer numeric IDs
+                intel.caseIds.append(case_id)
+    
+    # 8. POLICY NUMBERS
+    for pattern in POLICY_PATTERNS:
+        matches = pattern.findall(text)
+        for match in matches:
+            policy = match.strip()
+            if len(policy) >= 4:
+                intel.policyNumbers.append(policy)
+    
+    # 9. ORDER NUMBERS
+    for pattern in ORDER_PATTERNS:
+        matches = pattern.findall(text)
+        for match in matches:
+            order = match.strip()
+            if len(order) >= 4:
+                intel.orderNumbers.append(order)
+    
     # Remove phone numbers that are substrings of extracted bank accounts (false positives)
     if intel.bankAccounts:
         def phone_inside_account(phone: str) -> bool:
@@ -350,6 +473,10 @@ def extract_from_message(text: str) -> ExtractedIntelligence:
     intel.upiIds = list(set(intel.upiIds))
     intel.phoneNumbers = list(set(intel.phoneNumbers))
     intel.suspiciousKeywords = list(set(intel.suspiciousKeywords))
+    intel.emailAddresses = list(set(intel.emailAddresses))
+    intel.caseIds = list(set(intel.caseIds))
+    intel.policyNumbers = list(set(intel.policyNumbers))
+    intel.orderNumbers = list(set(intel.orderNumbers))
     
     return intel
 
@@ -358,13 +485,13 @@ def extract_from_conversation(
     history: list[ConversationMessage],
     current_message: str = None
 ) -> ExtractedIntelligence:
-    """Extract intelligence from entire conversation."""
+    """Extract intelligence from entire conversation (all senders, not just scammer)."""
     combined = ExtractedIntelligence()
     
     for msg in history:
-        if msg.sender == "scammer":
-            msg_intel = extract_from_message(msg.text)
-            combined.merge(msg_intel)
+        # Extract from ALL messages - scammer provides intel, agent might quote it
+        msg_intel = extract_from_message(msg.text)
+        combined.merge(msg_intel)
     
     if current_message:
         current_intel = extract_from_message(current_message)

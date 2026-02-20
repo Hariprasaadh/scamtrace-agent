@@ -35,7 +35,11 @@ def _intel_is_empty(intel: dict) -> bool:
         len(intel.get('bankAccounts', [])) == 0 and
         len(intel.get('upiIds', [])) == 0 and
         len(intel.get('phishingLinks', [])) == 0 and
-        len(intel.get('phoneNumbers', [])) == 0
+        len(intel.get('phoneNumbers', [])) == 0 and
+        len(intel.get('emailAddresses', [])) == 0 and
+        len(intel.get('caseIds', [])) == 0 and
+        len(intel.get('policyNumbers', [])) == 0 and
+        len(intel.get('orderNumbers', [])) == 0
     )
 
 
@@ -47,17 +51,27 @@ def _build_goal_prompt(intel: dict) -> str:
     has_upi = len(intel.get('upiIds', [])) > 0
     has_link = len(intel.get('phishingLinks', [])) > 0
     has_phone = len(intel.get('phoneNumbers', [])) > 0
+    has_email = len(intel.get('emailAddresses', [])) > 0
+    has_case = len(intel.get('caseIds', [])) > 0
     
     if not has_bank and not has_upi:
          goals.append("- Ask for a bank account number or UPI ID to make the payment.")
          goals.append("- Say you are having trouble with the app and need a direct account.")
-    elif not has_link:
+    if not has_link:
          goals.append("- Ask for the website link again, say the previous one isn't working.")
-    elif not has_phone:
+         goals.append("- Ask 'Can I check this on your website? What is the URL?'")
+    if not has_phone:
          goals.append("- Ask for a phone number to call for support.")
+         goals.append("- Say 'What number should I call you back on?'")
+    if not has_email:
+         goals.append("- Ask for an email address: 'Can you email me the details/documents?'")
+    if not has_case:
+         goals.append("- Ask for a case/reference number: 'What is the case number for my records?'")
+         goals.append("- Ask for employee/officer ID: 'What is your employee ID?'")
          
     if len(goals) == 1:
         goals.append("- Keep the conversation going to waste their time.")
+        goals.append("- Ask about their organization, branch location, supervisor name.")
         
     return "\n".join(goals)
 

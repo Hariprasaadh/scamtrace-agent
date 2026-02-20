@@ -20,7 +20,20 @@ class MessageInput(BaseModel):
             return datetime.utcnow()
         if isinstance(v, datetime):
             return v
+        if isinstance(v, (int, float)):
+            try:
+                # Epoch milliseconds → datetime
+                return datetime.utcfromtimestamp(v / 1000 if v > 1e12 else v)
+            except (OSError, ValueError):
+                return datetime.utcnow()
         if isinstance(v, str):
+            # Try numeric string first (epoch ms)
+            if v.isdigit():
+                try:
+                    ts = int(v)
+                    return datetime.utcfromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                except (OSError, ValueError):
+                    pass
             try:
                 return datetime.fromisoformat(v.replace('Z', '+00:00'))
             except:
@@ -41,7 +54,18 @@ class ConversationMessage(BaseModel):
             return datetime.utcnow()
         if isinstance(v, datetime):
             return v
+        if isinstance(v, (int, float)):
+            try:
+                return datetime.utcfromtimestamp(v / 1000 if v > 1e12 else v)
+            except (OSError, ValueError):
+                return datetime.utcnow()
         if isinstance(v, str):
+            if v.isdigit():
+                try:
+                    ts = int(v)
+                    return datetime.utcfromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                except (OSError, ValueError):
+                    pass
             try:
                 return datetime.fromisoformat(v.replace('Z', '+00:00'))
             except:
@@ -92,6 +116,11 @@ class ExtractedIntelligence(BaseModel):
     phishingLinks: list[str] = Field(default_factory=list)
     phoneNumbers: list[str] = Field(default_factory=list)
     suspiciousKeywords: list[str] = Field(default_factory=list)
+    # New fields for evaluation scoring
+    emailAddresses: list[str] = Field(default_factory=list)
+    caseIds: list[str] = Field(default_factory=list)
+    policyNumbers: list[str] = Field(default_factory=list)
+    orderNumbers: list[str] = Field(default_factory=list)
     
     def is_empty(self) -> bool:
         """Check if no intelligence has been extracted."""
@@ -99,7 +128,11 @@ class ExtractedIntelligence(BaseModel):
             len(self.bankAccounts) == 0 and
             len(self.upiIds) == 0 and
             len(self.phishingLinks) == 0 and
-            len(self.phoneNumbers) == 0
+            len(self.phoneNumbers) == 0 and
+            len(self.emailAddresses) == 0 and
+            len(self.caseIds) == 0 and
+            len(self.policyNumbers) == 0 and
+            len(self.orderNumbers) == 0
         )
     
     def merge(self, other: "ExtractedIntelligence") -> None:
@@ -109,6 +142,10 @@ class ExtractedIntelligence(BaseModel):
         self.phishingLinks = list(set(self.phishingLinks + other.phishingLinks))
         self.phoneNumbers = list(set(self.phoneNumbers + other.phoneNumbers))
         self.suspiciousKeywords = list(set(self.suspiciousKeywords + other.suspiciousKeywords))
+        self.emailAddresses = list(set(self.emailAddresses + other.emailAddresses))
+        self.caseIds = list(set(self.caseIds + other.caseIds))
+        self.policyNumbers = list(set(self.policyNumbers + other.policyNumbers))
+        self.orderNumbers = list(set(self.orderNumbers + other.orderNumbers))
 
 
 class DetectionResult(BaseModel):
@@ -140,5 +177,8 @@ class FinalResultPayload(BaseModel):
     sessionId: str
     scamDetected: bool
     totalMessagesExchanged: int
+    engagementDurationSeconds: int = Field(default=0, description="Total engagement time in seconds")
     extractedIntelligence: dict = Field(..., description="Intelligence dict")
     agentNotes: str = Field(..., description="Summary of engagement")
+    scamType: str = Field(default="unknown", description="Detected scam category")
+    confidenceLevel: float = Field(default=0.0, ge=0.0, le=1.0, description="Detection confidence")

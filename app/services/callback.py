@@ -4,6 +4,7 @@ GUVI Callback Handler: Sends final results to the evaluation endpoint.
 
 import asyncio
 import httpx
+from datetime import datetime, timezone
 
 from app.core.config import get_settings
 from app.models.schemas import SessionState, FinalResultPayload, ExtractedIntelligence
@@ -56,6 +57,14 @@ def _summarize_notes(session: SessionState, intel: ExtractedIntelligence) -> str
         parts.append("Bank account(s) mentioned: " + ", ".join(intel.bankAccounts[:5]) + ".")
     if intel.phoneNumbers:
         parts.append("Contact number(s) shared: " + ", ".join(intel.phoneNumbers[:5]) + ".")
+    if intel.emailAddresses:
+        parts.append("Email address(es) shared: " + ", ".join(intel.emailAddresses[:5]) + ".")
+    if intel.caseIds:
+        parts.append("Case/Reference ID(s): " + ", ".join(intel.caseIds[:5]) + ".")
+    if intel.policyNumbers:
+        parts.append("Policy number(s): " + ", ".join(intel.policyNumbers[:5]) + ".")
+    if intel.orderNumbers:
+        parts.append("Order/Booking ID(s): " + ", ".join(intel.orderNumbers[:5]) + ".")
     
     return " ".join(parts) if parts else "Engagement completed."
 
@@ -76,6 +85,66 @@ def _intel_for_callback(session: SessionState) -> ExtractedIntelligence:
     return base
 
 
+def _infer_scam_type(session: SessionState) -> str:
+    """
+    Infer the type of scam based on detection indicators and conversation content.
+    Returns one of: bank_fraud, upi_fraud, phishing, job_scam, investment_scam,
+    tech_support_scam, lottery_scam, or unknown.
+    """
+    indicators_text = ""
+    if session.detection_result and session.detection_result.indicators:
+        indicators_text = " ".join(session.detection_result.indicators).lower()
+    
+    # Also scan conversation history for more context
+    history_text = ""
+    for msg in (session.conversation_history or []):
+        if msg.sender == "scammer":
+            history_text += " " + msg.text.lower()
+    
+    combined = indicators_text + " " + history_text
+    
+    # Check for phishing links first (highest priority if links are present)
+    intel = session.intelligence
+    if intel.phishingLinks:
+        return "phishing"
+    
+    # UPI fraud
+    if any(kw in combined for kw in ['upi', 'gpay', 'phonepe', 'paytm', 'cashback', 'upi_request']):
+        return "upi_fraud"
+    
+    # Bank fraud
+    if any(kw in combined for kw in ['bank', 'account', 'kyc', 'otp', 'blocked', 'suspended', 'sbi', 'hdfc', 'icici']):
+        return "bank_fraud"
+    
+    # Job scam
+    if any(kw in combined for kw in ['job', 'hiring', 'salary', 'wfh', 'part time', 'work from home', 'registration fee']):
+        return "job_scam"
+    
+    # Investment scam
+    if any(kw in combined for kw in ['investment', 'profit', 'return', 'crypto', 'bitcoin', 'double your money']):
+        return "investment_scam"
+    
+    # Lottery/prize scam
+    if any(kw in combined for kw in ['lottery', 'prize', 'winner', 'congratulations', 'won', 'jackpot']):
+        return "lottery_scam"
+    
+    # Tech support scam
+    if any(kw in combined for kw in ['customer care', 'support team', 'refund', 'delivery', 'service']):
+        return "tech_support_scam"
+    
+    return "unknown"
+
+
+def _compute_engagement_duration(session: SessionState) -> int:
+    """Compute engagement duration in seconds from session timestamps."""
+    try:
+        now = datetime.utcnow()
+        delta = now - session.created_at
+        return max(int(delta.total_seconds()), 0)
+    except Exception:
+        return 0
+
+
 def _build_payload(session: SessionState) -> FinalResultPayload:
     """Build the callback payload from session state."""
     intel = _intel_for_callback(session)
@@ -84,14 +153,29 @@ def _build_payload(session: SessionState) -> FinalResultPayload:
         "upiIds": intel.upiIds,
         "phishingLinks": intel.phishingLinks,
         "phoneNumbers": intel.phoneNumbers,
-        "suspiciousKeywords": intel.suspiciousKeywords
+        "suspiciousKeywords": intel.suspiciousKeywords,
+        "emailAddresses": intel.emailAddresses,
+        "caseIds": intel.caseIds,
+        "policyNumbers": intel.policyNumbers,
+        "orderNumbers": intel.orderNumbers,
     }
+    
+    # Compute engagement metrics
+    engagement_duration = _compute_engagement_duration(session)
+    scam_type = _infer_scam_type(session)
+    confidence = 0.0
+    if session.detection_result:
+        confidence = session.detection_result.confidence
+    
     return FinalResultPayload(
         sessionId=session.session_id,
         scamDetected=session.scam_detected,
         totalMessagesExchanged=session.messages_exchanged,
+        engagementDurationSeconds=engagement_duration,
         extractedIntelligence=intelligence_dict,
-        agentNotes=_summarize_notes(session, intel)
+        agentNotes=_summarize_notes(session, intel),
+        scamType=scam_type,
+        confidenceLevel=confidence,
     )
 
 
