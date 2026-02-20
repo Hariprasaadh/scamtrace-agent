@@ -1,4 +1,4 @@
-# ScamTrace Agent 🛡️
+# ScamTrace Agent
 
 AI-powered agentic honeypot API for scam detection and intelligence extraction. Built for the GUVI Hackathon — detects scam intent in real-time, autonomously engages scammers through believable personas, and extracts actionable fraud intelligence across multi-turn conversations.
 
