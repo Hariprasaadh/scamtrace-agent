@@ -214,9 +214,10 @@ async def generate_response(
     lang = _detect_language(scammer_message)
     if lang == 'english':
         system_prompt += (
-            "\n\n## LANGUAGE RULE\n"
-            "The scammer is writing in English. "
-            "You MUST reply in plain English ONLY. Do NOT use any Hindi or Hinglish words."
+            "\n\n## CRITICAL LANGUAGE OVERRIDE — THIS SUPERSEDES ALL CHARACTER INSTRUCTIONS ABOVE\n"
+            "The scammer is writing in ENGLISH. You MUST respond in plain English ONLY.\n"
+            "DO NOT use any Hindi or Hinglish words (no 'Accha', 'Theek hai', 'sir', 'Lekin', 'Kya', etc.).\n"
+            "Speak as a confused/worried English-speaking person. Keep the same suspicious tone but in English."
         )
     else:
         system_prompt += (

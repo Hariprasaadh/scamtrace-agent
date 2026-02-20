@@ -215,10 +215,19 @@ def _is_valid_email(email: str, upi_ids: list = None) -> bool:
     if len(username) < 1 or len(domain) < 3:
         return False
     
-    # Must have a dot in domain (e.g. gmail.com, not just @paytm)
+    # Domains without a dot: reject only if they look like a known UPI handle.
+    # A scammer may use a fake domain like @fakebank — still worth capturing.
+    _upi_shortnames = frozenset([
+        'paytm', 'ybl', 'oksbi', 'okaxis', 'okicici', 'okhdfcbank', 'upi',
+        'apl', 'axl', 'hdfcbank', 'icici', 'sbi', 'kotak', 'indus', 'pnb',
+        'rbl', 'idfcbank', 'aubank', 'idbi', 'imobile', 'fbl', 'barodampay',
+        'abfspay', 'naviaxis', 'yesbankltd',
+    ])
     if '.' not in domain:
-        return False
-    
+        if domain.lower() in _upi_shortnames:
+            return False   # definitely a UPI handle, not an email
+        return True        # unknown domain without dot — capture it (e.g. @fakebank)
+
     tld = domain.split('.')[-1].lower()
     
     # Must have a valid-looking TLD
