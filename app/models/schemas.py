@@ -178,13 +178,21 @@ class SessionState(BaseModel):
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
 
 
+class EngagementMetrics(BaseModel):
+    """Nested engagement metrics — the scoring function reads these from engagementMetrics sub-object."""
+    engagementDurationSeconds: int = Field(default=0, description="Total engagement time in seconds")
+    totalMessagesExchanged: int = Field(default=0, description="Total messages exchanged")
+
+
 class FinalResultPayload(BaseModel):
     """Payload for GUVI callback API."""
     sessionId: str
     scamDetected: bool
     totalMessagesExchanged: int
     engagementDurationSeconds: int = Field(default=0, description="Total engagement time in seconds")
+    engagementMetrics: EngagementMetrics = Field(default_factory=EngagementMetrics)
     extractedIntelligence: dict = Field(..., description="Intelligence dict")
     agentNotes: str = Field(default="", description="Summary notes from the honeypot agent")
     scamType: str = Field(default="unknown", description="Detected scam category")
     confidenceLevel: float = Field(default=0.0, ge=0.0, le=1.0, description="Detection confidence")
+    status: str = Field(default="success", description="Response status")

@@ -13,12 +13,12 @@ logger = logging.getLogger(__name__)
 
 # Fallback responses when LLM creates errors
 FALLBACK_RESPONSES = {
-    "otp": "Wait, let me check.. which OTP are you asking for?",
-    "bank": "Which bank sir? I have SBI and HDFC both",
-    "link": "Link not opening sir. Can you send again?",
-    "upi": "Ok sir, where should I send? What is the UPI id?",
-    "phone": "Ok, what number should I call? Please give",
-    "default": "I am not understanding properly. Please explain again?"
+    "otp": "But real banks never ask for OTP on the phone — this seems suspicious. Which OTP and why do you need it?",
+    "bank": "Which bank account should I send to? Can you give me the account number and your employee ID?",
+    "link": "This link looks suspicious — it doesn't match the official website. Can you send the real link from your company site?",
+    "upi": "Where should I send the payment — what is the UPI ID? Also, what is your official company website so I can verify?",
+    "phone": "What number should I call you back on? And what is your official toll-free number so I can confirm this is legitimate?",
+    "default": "I'm a bit confused and worried — can you explain again? What is your employee ID and which department are you from?"
 }
 
 _client: AsyncGroq = None
@@ -29,7 +29,7 @@ def _get_client() -> AsyncGroq:
     global _client
     if _client is None:
         settings = get_settings()
-        _client = AsyncGroq(api_key=settings.groq_api_key)
+        _client = AsyncGroq(api_key=settings.groq_api_key, timeout=15.0)
     return _client
 
 

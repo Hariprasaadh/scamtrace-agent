@@ -1,101 +1,91 @@
-# ScamTrace Agent
+# ScamTrace Agent 🛡️
 
-An AI-powered agentic honeypot that detects scam intent, autonomously engages scammers, and extracts actionable fraud intelligence through multi-turn conversations.
+AI-powered agentic honeypot API for scam detection and intelligence extraction. Built for the GUVI Hackathon — detects scam intent in real-time, autonomously engages scammers through believable personas, and extracts actionable fraud intelligence across multi-turn conversations.
 
-## Features
+## Description
 
-- **3-Tier Scam Detection**: Cost-efficient detection using rules, ML, and LLM
-  - Tier 1: Rule-based keyword/pattern matching (free, <10ms)
-  - Tier 2: ML classifier with TF-IDF + Logistic Regression (free, <50ms)
-  - Tier 3: LLM confirmation via Groq for edge cases (~10% of messages)
-  
-- **Intelligent Engagement**: LLM-powered agent with a believable victim persona
-  - Maintains multi-turn conversations
-  - Adapts responses based on scammer tactics
-  - Never reveals detection
+ScamTrace Agent acts as an intelligent honeypot that:
+- **Detects scams** using a cost-efficient 3-tier detection pipeline (Rules → ML → LLM)
+- **Engages scammers** through dynamic victim personas to keep them talking
+- **Extracts intelligence** — phone numbers, bank accounts, UPI IDs, phishing links, emails, case IDs, and more
+- **Reports findings** automatically to the evaluation endpoint after every detected scam turn
 
-- **Intelligence Extraction**: Automatically extracts
-  - Bank account numbers
-  - UPI IDs
-  - Phishing links
-  - Phone numbers
-  - Suspicious keywords
+The system is designed to be robust and generic — it handles any scam type without hardcoded responses, using pattern-based detection and LLM-powered conversation.
 
-- **GUVI Integration**: Automatic callback to evaluation endpoint
+## Tech Stack
 
-## Quick Start
+| Layer | Technology |
+|---|---|
+| **Framework** | FastAPI (Python 3.10+) |
+| **LLM Provider** | Groq (LLaMA 3.3 70B Versatile) |
+| **ML Classifier** | scikit-learn (TF-IDF + Logistic Regression) |
+| **HTTP Client** | httpx (async) |
+| **Validation** | Pydantic v2 |
+| **Deployment** | Render / any HTTPS host |
 
-### Prerequisites
+## Setup Instructions
 
-- Python 3.10+
-- Groq API key ([Get one here](https://console.groq.com/))
-
-### Installation
+### 1. Clone the repository
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/scamtrace-agent.git
+git clone https://github.com/Hariprasaadh/scamtrace-agent.git
 cd scamtrace-agent
+```
 
-# Create virtual environment
+### 2. Install dependencies
+
+```bash
 python -m venv venv
 
-# Activate virtual environment
-# On Windows:
+# Windows:
 venv\Scripts\activate
-# On macOS/Linux:
+# macOS/Linux:
 source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Configuration
+### 3. Set environment variables
 
 ```bash
-# Copy example environment file
 cp .env.example .env
-
-# Edit .env with your settings
-# Required: API_KEY, GROQ_API_KEY
 ```
 
-### Running Locally
+Edit `.env` with your actual keys:
+
+```env
+API_KEY=your-api-key-here
+GROQ_API_KEY=your-groq-api-key-here
+GROQ_MODEL=llama-3.3-70b-versatile
+GUVI_CALLBACK_URL=https://hackathon.guvi.in/api/updateHoneyPotFinalResult
+```
+
+Get a Groq API key at [console.groq.com](https://console.groq.com/).
+
+### 4. Run the application
 
 ```bash
-# Start the server
-uvicorn app.main:app --reload --port 8000
-
-# Server will be available at http://localhost:8000
-# API docs at http://localhost:8000/docs
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## API Usage
+Server will be live at `http://localhost:8000`. Interactive API docs at `/docs`.
 
-### Authentication
+## API Endpoint
 
-All requests require the `x-api-key` header:
+- **URL**: `https://your-deployed-url.com/api/message`
+- **Aliases**: `/detect`, `/honeypot` (same handler)
+- **Method**: POST
+- **Authentication**: `x-api-key` header (optional if not configured)
 
-```
-x-api-key: your-secret-api-key
-Content-Type: application/json
-```
-
-### Main Endpoint
-
-**POST** `/api/message`
-
-Process an incoming scam message and get a response.
-
-#### Request Body
+### Request Format
 
 ```json
 {
-  "sessionId": "unique-session-id",
+  "sessionId": "uuid-v4-string",
   "message": {
     "sender": "scammer",
-    "text": "Your bank account will be blocked. Share OTP immediately.",
-    "timestamp": "2026-01-21T10:15:30Z"
+    "text": "URGENT: Your SBI account has been compromised. Share OTP immediately.",
+    "timestamp": "2025-02-11T10:30:00Z"
   },
   "conversationHistory": [],
   "metadata": {
@@ -106,27 +96,96 @@ Process an incoming scam message and get a response.
 }
 ```
 
-#### Response
+### Response Format
 
 ```json
 {
   "status": "success",
-  "reply": "Which bank sir? I have SBI and HDFC both"
+  "reply": "Oh no, which account sir? I have SBI savings and current both..."
 }
 ```
 
-### Debug Endpoints
+### Final Output (sent automatically to callback)
 
-- **GET** `/api/session/{session_id}` - Get session information
-- **POST** `/api/test/detect` - Test scam detection on a message
-- **POST** `/api/test/extract` - Test intelligence extraction on a message
+```json
+{
+  "sessionId": "abc123-session-id",
+  "scamDetected": true,
+  "totalMessagesExchanged": 8,
+  "engagementDurationSeconds": 120,
+  "extractedIntelligence": {
+    "phoneNumbers": ["+91-9876543210"],
+    "bankAccounts": ["1234567890123456"],
+    "upiIds": ["scammer.fraud@fakebank"],
+    "phishingLinks": ["http://malicious-site.com"],
+    "emailAddresses": ["scammer@fake.com"]
+  },
+  "agentNotes": "[Detection] tier=rules scamDetected=True confidence=0.95 | [Intel] UPI ID(s): scammer.fraud@fakebank",
+  "scamType": "bank_fraud",
+  "confidenceLevel": 0.95
+}
+```
+
+## Approach
+
+### How We Detect Scams
+
+The system uses a **3-tier cascading detection pipeline** that optimizes for both accuracy and cost:
+
+1. **Tier 1 — Rule-Based** (~70% of messages, <10ms, free)
+   - 50+ scam keyword patterns with weighted scoring
+   - Urgency phrases, financial terms, impersonation signals
+   - High confidence → immediately confirmed; low confidence → pass to Tier 2
+
+2. **Tier 2 — ML Classifier** (~20% of messages, <50ms, free)
+   - TF-IDF vectorizer + Logistic Regression trained on scam dataset
+   - Handles ambiguous messages that rules can't confidently classify
+
+3. **Tier 3 — LLM Confirmation** (~10% of messages, ~$0.001/msg)
+   - Groq-hosted LLaMA 3.3 for final edge-case adjudication
+   - Only invoked when Rules + ML disagree or are uncertain
+
+4. **IOC Fallback** — If any hard intelligence artifact (UPI ID, bank account, phishing link) is found in a message, the system force-detects it as a scam even if the detection pipeline was uncertain.
+
+### How We Extract Intelligence
+
+Regex-based extraction engine that captures **8 intelligence types**:
+
+| Data Type | Examples |
+|---|---|
+| 📞 Phone Numbers | `+91-9876543210`, `8001234567` |
+| 🏦 Bank Accounts | `30045678901234`, `A/C 50100123456789` |
+| 💳 UPI IDs | `scammer@oksbi`, `pay@ybl` |
+| 🔗 Phishing Links | `https://sbi-verify.online`, `bit.ly/x` |
+| 📧 Email Addresses | `fraud@cybercrime.gov.in` |
+| 🆔 Case/Reference IDs | `FRD-2025-78901`, `FIR 1234/2025` |
+| 📋 Policy Numbers | `LIC-INS-456789`, `POL-2025-001` |
+| 📦 Order Numbers | `AMZ-ORD-112233`, `BKG-789012` |
+
+Intelligence is extracted from **all messages** (scammer + agent quotes) and accumulated across the full conversation. After every scam-detected turn, the latest cumulative intelligence is pushed to the callback endpoint.
+
+### How We Maintain Engagement
+
+- **Dynamic Personas**: The agent selects a victim persona based on the scam type:
+  - `elderly_victim` — confused, trusting, asks for help (bank/financial scams)
+  - `desperate_youth` — eager but cautious (job/loan scams)
+  - `tech_illiterate` — confused by technology (tech support/refund scams)
+  - `default` — neutral, inquisitive
+
+- **LLM-Powered Responses**: Groq LLaMA generates natural, contextual replies that:
+  - Ask investigative questions (identity, organization, credentials)
+  - Reference red flags without revealing detection
+  - Probe for contact details and intelligence artifacts
+  - Maintain conversation flow to maximize turn count
+
+- **Progressive Callback**: The final output is sent on **every scam-detected turn** (fire-and-forget), ensuring the evaluator always has the latest intelligence regardless of when the conversation ends.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     API Layer (FastAPI)                      │
-│                    POST /api/message                         │
+│            POST /api/message  /detect  /honeypot             │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
@@ -134,125 +193,116 @@ Process an incoming scam message and get a response.
 │                  3-Tier Scam Detection                       │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
 │  │ Tier 1:     │  │ Tier 2:     │  │ Tier 3:     │         │
-│  │ Rules       │─▶│ ML (TF-IDF) │─▶│ LLM (Groq)  │         │
+│  │ Rules       │──▶│ ML (TF-IDF) │──▶│ LLM (Groq)  │         │
 │  │ ~70% msgs   │  │ ~20% msgs   │  │ ~10% msgs   │         │
 │  └─────────────┘  └─────────────┘  └─────────────┘         │
+│                          + IOC Fallback                      │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              Honeypot Agent (if scam detected)               │
-│  • Victim persona (confused elderly person)                  │
-│  • Extracts: bank accounts, UPI, links, phones              │
-│  • Multi-turn conversation handling                          │
+│  • Dynamic victim persona selection                          │
+│  • LLM-powered natural conversation (Groq)                   │
+│  • 8-type intelligence extraction (regex)                    │
+│  • Multi-turn context tracking                               │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    GUVI Callback                             │
-│  POST https://hackathon.guvi.in/api/updateHoneyPotFinalResult│
+│              GUVI Callback (fire-and-forget)                  │
+│  Pushes latest finalOutput on every scam-detected turn       │
 └─────────────────────────────────────────────────────────────┘
 ```
-
-## Deployment on Render
-
-### Option 1: Using render.yaml (Recommended)
-
-1. Push code to GitHub
-
-2. Go to [Render Dashboard](https://dashboard.render.com/)
-
-3. Click **New** → **Blueprint**
-
-4. Connect your GitHub repository
-
-5. Render will detect `render.yaml` and configure automatically
-
-6. Add environment variables:
-   - `API_KEY` - Your secret API key
-   - `GROQ_API_KEY` - Your Groq API key
-
-7. Click **Apply** to deploy
-
-### Option 2: Manual Setup
-
-1. Go to [Render Dashboard](https://dashboard.render.com/)
-
-2. Click **New** → **Web Service**
-
-3. Connect your GitHub repository
-
-4. Configure:
-   - **Runtime**: Python
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-
-5. Add environment variables:
-   - `API_KEY` - Your secret API key
-   - `GROQ_API_KEY` - Your Groq API key
-   - `GUVI_CALLBACK_URL` - `https://hackathon.guvi.in/api/updateHoneyPotFinalResult`
-
-6. Click **Create Web Service**
-
-Your API will be available at: `https://your-service-name.onrender.com`
 
 ## Project Structure
 
 ```
 scamtrace-agent/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI entry point
+│   ├── main.py                 # FastAPI entry point + /api/message handler
 │   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py           # Settings/configuration
-│   │   └── session.py          # Session management
+│   │   ├── config.py           # Settings (Pydantic BaseSettings from .env)
+│   │   └── session.py          # In-memory session management
 │   ├── models/
-│   │   ├── __init__.py
-│   │   └── schemas.py          # Pydantic models
+│   │   └── schemas.py          # Pydantic models (RequestPayload, FinalResultPayload, etc.)
 │   ├── detection/
-│   │   ├── __init__.py
-│   │   ├── orchestrator.py     # 3-tier coordinator
-│   │   ├── rules.py            # Tier 1: Rule-based
-│   │   ├── ml_classifier.py    # Tier 2: ML classifier
-│   │   └── llm_detector.py     # Tier 3: LLM
+│   │   ├── orchestrator.py     # 3-tier detection coordinator
+│   │   ├── rules.py            # Tier 1: Rule-based keyword scoring
+│   │   ├── ml_classifier.py    # Tier 2: TF-IDF + LogisticRegression
+│   │   └── llm_detector.py     # Tier 3: LLM via Groq
 │   └── services/
-│       ├── __init__.py
-│       ├── agent.py            # Honeypot agent
-│       ├── extractor.py        # Intelligence extraction
-│       └── callback.py         # GUVI callback handler
+│       ├── agent.py            # LLM-powered honeypot agent (Groq)
+│       ├── extractor.py        # Regex-based intelligence extraction (8 types)
+│       ├── personas.py         # Dynamic victim persona selection
+│       └── callback.py         # GUVI callback handler + payload builder
 ├── data/
-│   └── scam_training.json      # Training data for ML
-├── models/
-│   └── .gitkeep                # Trained model storage
-├── requirements.txt
-├── Procfile
+│   └── scam_training.json      # Training data for ML classifier
+├── models/                     # Trained ML model storage (.pkl files)
+├── test_evaluation.py          # Comprehensive test suite (46 unit + integration tests)
+├── requirements.txt            # Python dependencies
+├── .env.example                # Environment variables template
 ├── render.yaml                 # Render deployment config
-├── .env.example
+├── Procfile                    # Process file for deployment
 └── README.md
 ```
 
-## Detection Thresholds
+## Testing
 
-| Tier | High Confidence | Low Confidence | Action |
-|------|-----------------|----------------|--------|
-| Rules | >= 0.8 | < 0.3 | Scam confirmed / Safe |
-| ML | >= 0.6 | < 0.4 | Scam confirmed / Safe |
-| LLM | - | - | Final decision |
+### Unit Tests (no server required)
 
-## Cost Optimization
+```bash
+python -m pytest test_evaluation.py -k "unit" -v
+```
 
-By using the 3-tier approach:
-- ~70% of messages resolved by rules (free)
-- ~20% resolved by ML (free)
-- ~10% need LLM (~$0.001/msg)
+Covers: extraction accuracy (all 8 types), detection precision, callback payload structure, persona selection, schema validation, and response time.
 
-**Result**: ~90% cost reduction compared to LLM-only detection.
+### Full Evaluation (requires running server)
 
-## License
+```bash
+# Terminal 1: Start server
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-MIT License
+# Terminal 2: Run evaluation
+python test_evaluation.py
+```
 
-## Acknowledgments
+Runs all 15 scam scenarios with the official rubric scoring:
 
-Built for the GUVI Hackathon - Agentic Honey-Pot for Scam Detection & Intelligence Extraction.
+| Category | Max Points |
+|---|---|
+| Scam Detection | 20 |
+| Extracted Intelligence | 30 |
+| Conversation Quality | 30 |
+| Engagement Quality | 10 |
+| Response Structure | 10 |
+
+## Deployment
+
+### Render (Recommended)
+
+1. Push code to GitHub
+2. Go to [Render Dashboard](https://dashboard.render.com/) → **New** → **Blueprint**
+3. Connect your GitHub repo (auto-detects `render.yaml`)
+4. Add environment variables: `API_KEY`, `GROQ_API_KEY`
+5. Click **Apply** to deploy
+
+Your API will be available at `https://scamtrace-agent.onrender.com/api/message`
+
+### Any Platform
+
+The only requirements are:
+- Python 3.10+ runtime
+- Environment variables set (see `.env.example`)
+- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `API_KEY` | Yes | API key for `x-api-key` header authentication |
+| `GROQ_API_KEY` | Yes | Groq API key for LLM (detection + agent) |
+| `GROQ_MODEL` | No | LLM model name (default: `llama-3.3-70b-versatile`) |
+| `GUVI_CALLBACK_URL` | No | Callback endpoint for final results |
+| `MAX_CONVERSATION_MESSAGES` | No | Max turns before canned reply (default: 10) |
+| `SESSION_TTL_MINUTES` | No | Session expiry time (default: 30) |
