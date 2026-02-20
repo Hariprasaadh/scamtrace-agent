@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     rule_low_threshold: float = 0.2   
     ml_high_threshold: float = 0.55
     ml_low_threshold: float = 0.3  
-    max_messages_without_intel: int = 5
+    max_messages_without_intel: int = 10
     min_messages_for_callback: int = 5   # send callback once ≥5 scam turns logged (guarantees callback even in short scenarios)
     max_conversation_messages: int = 10  # keep LLM-engaged up to this many turns
     
