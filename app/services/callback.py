@@ -8,7 +8,7 @@ import httpx
 from datetime import datetime, timezone
 
 from app.core.config import get_settings
-from app.models.schemas import SessionState, FinalResultPayload, ExtractedIntelligence
+from app.models.schemas import SessionState, FinalResultPayload, ExtractedIntelligence, EngagementMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -205,10 +205,16 @@ def _build_payload(session: SessionState) -> FinalResultPayload:
         scamDetected=session.scam_detected,
         totalMessagesExchanged=session.messages_exchanged,
         engagementDurationSeconds=engagement_duration,
+        # CRITICAL: The scorer reads engagement data from THIS nested object
+        engagementMetrics=EngagementMetrics(
+            engagementDurationSeconds=engagement_duration,
+            totalMessagesExchanged=session.messages_exchanged,
+        ),
         extractedIntelligence=intelligence_dict,
         agentNotes=notes_str,
         scamType=scam_type,
         confidenceLevel=confidence,
+        status="success",
     )
 
 

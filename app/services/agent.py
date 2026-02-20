@@ -29,7 +29,7 @@ def _get_client() -> AsyncGroq:
     global _client
     if _client is None:
         settings = get_settings()
-        _client = AsyncGroq(api_key=settings.groq_api_key)
+        _client = AsyncGroq(api_key=settings.groq_api_key, timeout=15.0)
     return _client
 
 
