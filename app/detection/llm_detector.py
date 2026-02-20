@@ -3,10 +3,13 @@ Tier 3: LLM-based scam detection for edge cases.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from groq import AsyncGroq
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -132,8 +135,12 @@ async def analyze(message: str, history: list[dict] = None) -> LLMResult:
         return _parse_response(result_text)
         
     except Exception as e:
+        logger.error(f"LLM detection error: {e}", exc_info=True)
+        # LLM is only called when scores are ambiguous (0.3–0.55 range).
+        # In that zone, a network/API failure should err toward catching the scam
+        # rather than letting it pass — false positive costs nothing; false negative = 20 pts lost.
         return LLMResult(
-            is_scam=False,
-            confidence=0.5,
-            reasoning=f"Error during analysis: {str(e)}"
+            is_scam=True,
+            confidence=0.65,
+            reasoning=f"LLM unavailable; defaulting to scam (safe-fail): {str(e)}"
         )

@@ -3,11 +3,14 @@ GUVI Callback Handler: Sends final results to the evaluation endpoint.
 """
 
 import asyncio
+import logging
 import httpx
 from datetime import datetime, timezone
 
 from app.core.config import get_settings
 from app.models.schemas import SessionState, FinalResultPayload, ExtractedIntelligence
+
+logger = logging.getLogger(__name__)
 
 
 _client: httpx.AsyncClient = None
@@ -29,44 +32,66 @@ async def close_client() -> None:
         _client = None
 
 
-def _summarize_notes(session: SessionState, intel: ExtractedIntelligence) -> str:
+def _build_agent_notes(session: SessionState, intel: ExtractedIntelligence) -> list[str]:
     """
-    Create a short, natural-language summary for immediate action.
-    Focus on what happened and what was extracted so someone can act on it.
+    Build the full agentNotes list sent to the evaluator.
+    Contains three sections:
+      1. Per-turn operational notes (detection events, extraction events)
+      2. Tactic analysis (what the scammer did)
+      3. Intel summary (what was extracted)
     """
-    parts = []
-    
-    # What tactics were used (no need to mention detection tier/confidence)
+    notes: list[str] = []
+
+    # --- Section 1: per-turn operational timeline from session.agent_notes ---
+    for raw_note in (session.agent_notes or []):
+        notes.append(raw_note)
+
+    # Include LLM detection reasoning if available
+    if session.detection_result:
+        dr = session.detection_result
+        notes.append(
+            f"[Detection] tier={dr.tier} scamDetected={dr.is_scam} "
+            f"confidence={dr.confidence:.2f} indicators={dr.indicators}"
+        )
+
+    # --- Section 2: tactic analysis ---
     if session.detection_result and session.detection_result.indicators:
-        ind = session.detection_result.indicators[:6]
+        ind = session.detection_result.indicators
         if any("urgency" in i for i in ind) or any("urgent" in i.lower() for i in ind):
-            parts.append("Scammer used urgency tactics (block/suspend/immediate action).")
+            notes.append("[Tactic] Urgency pressure used: block/suspend/immediate action threatened.")
         if any("sensitive" in i for i in ind) or any("otp" in i.lower() for i in ind):
-            parts.append("Sensitive data requested (OTP, account number, etc.).")
+            notes.append("[Tactic] Sensitive data solicited: OTP, account credentials, or personal info.")
         if any("impersonation" in i for i in ind):
-            parts.append("Impersonation of bank/authority.")
+            notes.append("[Tactic] Impersonation detected: posed as bank, TRAI, police, or courier.")
         if any("action_requests" in i for i in ind):
-            parts.append("Payment or data redirection requested.")
-    
-    # Extracted intelligence in actionable form (for immediate action)
+            notes.append("[Tactic] Payment or data redirection requested.")
+        if any("fee" in i for i in ind):
+            notes.append("[Tactic] Advance fee / processing fee demanded.")
+
+    # --- Section 3: extracted intelligence summary ---
     if intel.phishingLinks:
-        parts.append("Phishing link(s) shared: " + "; ".join(intel.phishingLinks[:3]) + ".")
+        notes.append("[Intel] Phishing link(s): " + "; ".join(intel.phishingLinks[:5]))
     if intel.upiIds:
-        parts.append("UPI ID(s) for payments: " + ", ".join(intel.upiIds[:5]) + ".")
+        notes.append("[Intel] UPI ID(s): " + ", ".join(intel.upiIds[:10]))
     if intel.bankAccounts:
-        parts.append("Bank account(s) mentioned: " + ", ".join(intel.bankAccounts[:5]) + ".")
+        notes.append("[Intel] Bank account(s): " + ", ".join(intel.bankAccounts[:10]))
     if intel.phoneNumbers:
-        parts.append("Contact number(s) shared: " + ", ".join(intel.phoneNumbers[:5]) + ".")
+        notes.append("[Intel] Phone number(s): " + ", ".join(intel.phoneNumbers[:10]))
     if intel.emailAddresses:
-        parts.append("Email address(es) shared: " + ", ".join(intel.emailAddresses[:5]) + ".")
+        notes.append("[Intel] Email address(es): " + ", ".join(intel.emailAddresses[:10]))
     if intel.caseIds:
-        parts.append("Case/Reference ID(s): " + ", ".join(intel.caseIds[:5]) + ".")
+        notes.append("[Intel] Case/Reference ID(s): " + ", ".join(intel.caseIds[:10]))
     if intel.policyNumbers:
-        parts.append("Policy number(s): " + ", ".join(intel.policyNumbers[:5]) + ".")
+        notes.append("[Intel] Policy number(s): " + ", ".join(intel.policyNumbers[:5]))
     if intel.orderNumbers:
-        parts.append("Order/Booking ID(s): " + ", ".join(intel.orderNumbers[:5]) + ".")
-    
-    return " ".join(parts) if parts else "Engagement completed."
+        notes.append("[Intel] Order/Booking ID(s): " + ", ".join(intel.orderNumbers[:5]))
+    if intel.suspiciousKeywords:
+        notes.append("[Intel] Suspicious keywords: " + ", ".join(sorted(set(intel.suspiciousKeywords))[:20]))
+
+    if not notes:
+        notes.append("Engagement completed — no scam indicators found.")
+
+    return notes
 
 
 def _intel_for_callback(session: SessionState) -> ExtractedIntelligence:
@@ -87,51 +112,67 @@ def _intel_for_callback(session: SessionState) -> ExtractedIntelligence:
 
 def _infer_scam_type(session: SessionState) -> str:
     """
-    Infer the type of scam based on detection indicators and conversation content.
+    Infer the type of scam based on detection indicators, IOC data, and conversation content.
+    Priority order: IOC hard evidence first, then keyword matching.
     Returns one of: bank_fraud, upi_fraud, phishing, job_scam, investment_scam,
-    tech_support_scam, lottery_scam, or unknown.
+    tech_support_scam, lottery_scam, kyc_fraud, sim_swap_scam, courier_scam, or unknown.
     """
     indicators_text = ""
     if session.detection_result and session.detection_result.indicators:
         indicators_text = " ".join(session.detection_result.indicators).lower()
-    
-    # Also scan conversation history for more context
+
+    # Include accumulated indicators from multi-turn scoring
+    if session.accumulated_indicators:
+        indicators_text += " " + " ".join(session.accumulated_indicators).lower()
+
+    # Scan all scammer messages for richer context
     history_text = ""
     for msg in (session.conversation_history or []):
         if msg.sender == "scammer":
             history_text += " " + msg.text.lower()
-    
+
     combined = indicators_text + " " + history_text
-    
-    # Check for phishing links first (highest priority if links are present)
     intel = session.intelligence
+
+    # --- Hard IOC evidence first (highest confidence) ---
     if intel.phishingLinks:
         return "phishing"
-    
-    # UPI fraud
-    if any(kw in combined for kw in ['upi', 'gpay', 'phonepe', 'paytm', 'cashback', 'upi_request']):
+    if intel.upiIds:
         return "upi_fraud"
-    
-    # Bank fraud
-    if any(kw in combined for kw in ['bank', 'account', 'kyc', 'otp', 'blocked', 'suspended', 'sbi', 'hdfc', 'icici']):
+    if intel.bankAccounts:
         return "bank_fraud"
-    
-    # Job scam
-    if any(kw in combined for kw in ['job', 'hiring', 'salary', 'wfh', 'part time', 'work from home', 'registration fee']):
+
+    # --- Keyword matching on combined text ---
+    if any(kw in combined for kw in ['upi', 'gpay', 'phonepe', 'paytm', 'cashback', 'upi_request', 'scanner', 'qr code']):
+        return "upi_fraud"
+
+    if any(kw in combined for kw in ['kyc', 'know your customer', 'aadhar', 'pan card', 'video kyc']):
+        return "kyc_fraud"
+
+    if any(kw in combined for kw in ['sim', 'trai', 'telecom', 'mobile number', 'sim block', 'sim swap', 'dnd']):
+        return "sim_swap_scam"
+
+    if any(kw in combined for kw in ['courier', 'parcel', 'package', 'customs', 'fedex', 'dhl', 'narcotics']):
+        return "courier_scam"
+
+    if any(kw in combined for kw in ['bank', 'account', 'otp', 'blocked', 'suspended', 'sbi', 'hdfc', 'icici', 'neft', 'rtgs', 'ifsc']):
+        return "bank_fraud"
+
+    if any(kw in combined for kw in ['job', 'hiring', 'salary', 'wfh', 'part time', 'work from home', 'registration fee', 'task', 'youtube like']):
         return "job_scam"
-    
-    # Investment scam
-    if any(kw in combined for kw in ['investment', 'profit', 'return', 'crypto', 'bitcoin', 'double your money']):
+
+    if any(kw in combined for kw in ['investment', 'profit', 'return', 'crypto', 'bitcoin', 'trading', 'stock', 'double your money', 'guaranteed return']):
         return "investment_scam"
-    
-    # Lottery/prize scam
-    if any(kw in combined for kw in ['lottery', 'prize', 'winner', 'congratulations', 'won', 'jackpot']):
+
+    if any(kw in combined for kw in ['lottery', 'prize', 'winner', 'congratulations', 'won', 'jackpot', 'lucky draw', 'kbc']):
         return "lottery_scam"
-    
-    # Tech support scam
-    if any(kw in combined for kw in ['customer care', 'support team', 'refund', 'delivery', 'service']):
+
+    if any(kw in combined for kw in ['customer care', 'support team', 'refund', 'delivery', 'amazon', 'flipkart', 'remote access', 'anydesk', 'teamviewer']):
         return "tech_support_scam"
-    
+
+    if any(kw in combined for kw in ['epf', 'pf', 'pension', 'insurance', 'policy', 'claim', 'pm kisan', 'government']):
+        return "government_scheme_fraud"
+
     return "unknown"
 
 
@@ -173,7 +214,7 @@ def _build_payload(session: SessionState) -> FinalResultPayload:
         totalMessagesExchanged=session.messages_exchanged,
         engagementDurationSeconds=engagement_duration,
         extractedIntelligence=intelligence_dict,
-        agentNotes=_summarize_notes(session, intel),
+        agentNotes=_build_agent_notes(session, intel),
         scamType=scam_type,
         confidenceLevel=confidence,
     )
@@ -210,7 +251,7 @@ async def send_final_result(session: SessionState, max_retries: int = 3) -> bool
         if attempt < max_retries - 1:
             await asyncio.sleep(2 ** attempt)
     
-    print(f"Callback failed after {max_retries} attempts: {last_error}")
+        logger.warning(f"Callback failed after {max_retries} attempts: {last_error}")
     return False
 
 

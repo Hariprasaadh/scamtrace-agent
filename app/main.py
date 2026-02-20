@@ -2,6 +2,7 @@
 ScamTrace Agent - Main FastAPI Application
 """
 
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,12 @@ from app.models import (
 )
 from app.detection import detect
 from app.services import agent, extractor, callback
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -210,11 +217,27 @@ async def process_message(
         
         # Scam Detection
         if not current_session.scam_detected:
+            # Use server-side history as well (richer context than client-provided)
+            server_history = [
+                {"sender": m.sender, "text": m.text}
+                for m in (current_session.conversation_history or [])
+            ]
+            combined_history = server_history if server_history else history_dicts
+
             detection_result = await detect(
                 message=message.text,
-                history=history_dicts
+                history=combined_history,
+                accumulated_score=current_session.accumulated_rule_score,
+                accumulated_indicators=current_session.accumulated_indicators
             )
-            
+
+            # Always update accumulated score so cross-turn signals build up
+            await session.update_accumulated_score(
+                payload.sessionId,
+                detection_result.confidence if not detection_result.is_scam else 0.0,
+                detection_result.indicators
+            )
+
             if detection_result.is_scam:
                 detection_model = DetectionResultModel(
                     is_scam=detection_result.is_scam,
@@ -225,16 +248,45 @@ async def process_message(
                 await session.mark_scam_detected(payload.sessionId, detection_model)
                 current_session.scam_detected = True
                 current_session.detection_result = detection_model
-                
+
                 await session.add_agent_note(
                     payload.sessionId,
                     f"Scam detected via {detection_result.tier} (conf: {detection_result.confidence:.2f})"
                 )
         
-        # Generate Response
+        # Shared conversation history reference (used by extraction AND response generation)
+        history = (current_session.conversation_history or []) if current_session else []
+
+        # IOC-based force detection — runs whenever scam not yet confirmed.
+        # Any hard artefact (UPI/bank/link/phone) in a message is itself proof of an
+        # active scam regardless of tier scores.
+        if not current_session.scam_detected:
+            quick_intel = extractor.extract_from_message(message.text)
+            _ioc_found = (
+                quick_intel.upiIds
+                or quick_intel.bankAccounts
+                or quick_intel.phishingLinks
+                or quick_intel.phoneNumbers
+            )
+            if _ioc_found:
+                _force_model = DetectionResultModel(
+                    is_scam=True,
+                    confidence=0.90,
+                    tier="ioc",
+                    indicators=["IOC-based: hard intelligence artefact found in message"]
+                )
+                await session.mark_scam_detected(payload.sessionId, _force_model)
+                current_session.scam_detected = True
+                current_session.detection_result = _force_model
+                await session.add_agent_note(
+                    payload.sessionId,
+                    f"Scam force-detected via IOC (upi={bool(quick_intel.upiIds)}, "
+                    f"bank={bool(quick_intel.bankAccounts)}, link={bool(quick_intel.phishingLinks)}, "
+                    f"phone={bool(quick_intel.phoneNumbers)})"
+                )
+
+        # Extract intelligence from full conversation whenever scam is confirmed
         if current_session.scam_detected:
-            # Extract from full conversation (history + current) so we don't miss intel from earlier messages
-            history = (current_session.conversation_history or []) if current_session else []
             intel = extractor.extract_from_conversation(history, message.text)
             if not intel.is_empty():
                 await session.add_intelligence(payload.sessionId, intel)
@@ -242,21 +294,22 @@ async def process_message(
                     payload.sessionId,
                     f"Extracted: {_summarize_intel(intel)}"
                 )
-            
-            current_session = await session.get(payload.sessionId)
-            at_cap = current_session and current_session.messages_exchanged >= max_conversations
+
+        # Generate Response
+        if current_session.scam_detected:
+            # past_cap = turns BEYOND the cap (turn 11+). Turn 10 itself still gets a full
+            # LLM response so it contributes questions, red-flags and elicitation to scoring.
+            past_cap = current_session and current_session.messages_exchanged > max_conversations
             already_sent_final = current_session and current_session.callback_sent
-            
-            if at_cap:
-                if already_sent_final:
-                    reply = "I will verify and get back to you at the earliest."
-                else:
-                    reply = "I need to verify this with the bank first. I will get back. Thank you."
+
+            if past_cap and already_sent_final:
+                reply = "I will verify and get back to you at the earliest."
             else:
                 reply = await agent.generate_response(
                     scammer_message=message.text,
                     history=history,
-                    extracted_intel=current_session.intelligence.model_dump() if current_session else None
+                    extracted_intel=current_session.intelligence.model_dump() if current_session else None,
+                    session_id=payload.sessionId
                 )
             
             await session.append_to_conversation(payload.sessionId, "scammer", message.text)
@@ -273,7 +326,7 @@ async def process_message(
         return ResponsePayload(status="success", reply=reply)
     
     except Exception as e:
-        print(f"Error processing message: {e}")
+        logger.error(f"Error processing message: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"

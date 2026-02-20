@@ -168,6 +168,11 @@ class SessionState(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     callback_sent: bool = False
+    # Persona locked on first scam contact and reused for entire session
+    persona_name: Optional[str] = None
+    # Cumulative rule score across turns (catches spread-out multi-turn scam signals)
+    accumulated_rule_score: float = 0.0
+    accumulated_indicators: list[str] = Field(default_factory=list)
     # Server-side conversation history so the honeypot has memory even if client doesn't send it
     conversation_history: list[ConversationMessage] = Field(default_factory=list)
 
@@ -179,6 +184,6 @@ class FinalResultPayload(BaseModel):
     totalMessagesExchanged: int
     engagementDurationSeconds: int = Field(default=0, description="Total engagement time in seconds")
     extractedIntelligence: dict = Field(..., description="Intelligence dict")
-    agentNotes: str = Field(..., description="Summary of engagement")
+    agentNotes: list[str] = Field(default_factory=list, description="Timestamped notes from the honeypot agent")
     scamType: str = Field(default="unknown", description="Detected scam category")
     confidenceLevel: float = Field(default=0.0, ge=0.0, le=1.0, description="Detection confidence")

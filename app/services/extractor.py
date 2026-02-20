@@ -165,29 +165,38 @@ def _is_valid_upi(upi_id: str) -> bool:
     if len(provider) < 2:
         return False
     
-    # Filter out emails that get caught as UPI
-    email_domains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'protonmail.com']
-    if f"{provider.lower()}.com" in email_domains or provider.lower() in ['gmail', 'yahoo', 'hotmail']:
-        # But wait, some UPI handles ARE okaxis, oksbi etc.
-        # We only want to filter ACTUAL email addresses.
-        # UPI handles usually don't end in .com unless it's a custom domain
-        if '.' in provider and not provider.endswith('.com'):
-            pass # might be valid (e.g. @yes.bank)
-        elif provider.lower() in ['gmail', 'yahoo']: # Common email providers are NOT UPI banks usually
-             # Wait, GPay uses @okaxis etc.
-             # NOT @gmail
-             pass
-             
-    # Strict check: reject if it looks exactly like an email
-    if re.match(r'^[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}$', upi_id):
-        # It has a .tld, so it's likely an email OR a custom UPI.
-        # Most consumer UPIs don't have dots in the provider part (e.g. @oksbi, @Paytm).
-        # We will assume it's an email if the provider is a known email host
-        if any(d in upi_id.lower() for d in email_domains):
-            return False
-        # Also check if provider part has a TLD-like suffix (e.g. bank.com) → email
-        tld = provider.split('.')[-1].lower() if '.' in provider else ''
-        if tld in ('com', 'in', 'org', 'net', 'co', 'io', 'edu', 'gov', 'info', 'biz', 'me'):
+    # Explicitly reject known email providers — they are NOT UPI banks
+    _email_providers = frozenset([
+        'gmail', 'yahoo', 'hotmail', 'outlook', 'protonmail',
+        'rediffmail', 'icloud', 'live', 'msn', 'ymail',
+    ])
+    provider_base = provider.lower().split('.')[0]
+    if provider_base in _email_providers:
+        return False
+
+    # Reject known email domain suffixes (gmail.com, yahoo.co.in, etc.)
+    _email_domains = ['gmail.com', 'yahoo.com', 'yahoo.co.in', 'hotmail.com',
+                      'outlook.com', 'protonmail.com', 'rediffmail.com', 'icloud.com']
+    if any(upi_id.lower().endswith('@' + d) for d in _email_domains):
+        return False
+
+    # If the provider has a TLD that indicates a regular email (e.g. @company.com)
+    # but is NOT a known UPI bank domain, treat as email — unless it lacks a TLD
+    # (consumer UPIs: @oksbi, @okicici, @paytm, @ybl, @upi, etc.)
+    if '.' in provider:
+        tld = provider.lower().split('.')[-1]
+        # Known real UPI bank TLDs: .bank, .co (co-operative), or multi-level like @yes.bank
+        # Flag .com / .in / .org as email unless it's a recognized payment domain
+        _email_tlds = {'com', 'in', 'org', 'net', 'co', 'io', 'edu', 'gov', 'info', 'biz', 'me'}
+        _upi_bank_domains = frozenset([
+            'oksbi', 'okaxis', 'okicici', 'okhdfcbank', 'ybl', 'upi',
+            'paytm', 'apl', 'axl', 'hdfcbank', 'icici', 'sbi', 'imobile',
+            'jupiteraxis', 'fbl', 'kotak', 'indus', 'pnb', 'barodampay',
+            'dbs', 'rbl', 'aubank', 'idbi', 'idfcbank', 'abfspay',
+            'naviaxis', 'yesbankltd', 'yes.bank',
+        ])
+        provider_lower = provider.lower()
+        if tld in _email_tlds and provider_lower not in _upi_bank_domains:
             return False
 
     return True

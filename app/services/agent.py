@@ -2,10 +2,14 @@
 Honeypot Agent: LLM-powered conversational agent that engages scammers.
 """
 
+import logging
+
 from groq import AsyncGroq
 from app.core.config import get_settings
 from app.models.schemas import ConversationMessage
-from app.services.personas import get_persona
+from app.services.personas import get_persona, PERSONAS
+
+logger = logging.getLogger(__name__)
 
 # Fallback responses when LLM creates errors
 FALLBACK_RESPONSES = {
@@ -45,34 +49,47 @@ def _intel_is_empty(intel: dict) -> bool:
 
 def _build_goal_prompt(intel: dict) -> str:
     """Dynamically create goals based on missing intelligence (Active Baiting)."""
-    goals = ["\n## IMMEDIATE HIDDEN TEXT GOALS (Prioritize these):"]
-    
+    goals = ["\n## PRIORITY ACTIONS THIS TURN (do at least 2 of these):"]
+
     has_bank = len(intel.get('bankAccounts', [])) > 0
     has_upi = len(intel.get('upiIds', [])) > 0
     has_link = len(intel.get('phishingLinks', [])) > 0
     has_phone = len(intel.get('phoneNumbers', [])) > 0
     has_email = len(intel.get('emailAddresses', [])) > 0
     has_case = len(intel.get('caseIds', [])) > 0
-    
+    has_policy = len(intel.get('policyNumbers', [])) > 0
+    has_order = len(intel.get('orderNumbers', [])) > 0
+
     if not has_bank and not has_upi:
-         goals.append("- Ask for a bank account number or UPI ID to make the payment.")
-         goals.append("- Say you are having trouble with the app and need a direct account.")
+        goals.append("- ELICIT PAYMENT: Ask for bank account number + IFSC, OR their UPI ID.")
+        goals.append("  Say you prefer to do it via direct transfer — which account should you use?")
     if not has_link:
-         goals.append("- Ask for the website link again, say the previous one isn't working.")
-         goals.append("- Ask 'Can I check this on your website? What is the URL?'")
+        goals.append("- ELICIT LINK: Ask for their official website URL.")
+        goals.append("  Say the previous link didn't open properly — can they resend it?")
     if not has_phone:
-         goals.append("- Ask for a phone number to call for support.")
-         goals.append("- Say 'What number should I call you back on?'")
+        goals.append("- ELICIT PHONE: Ask for a callback number, saying you may lose network.")
+        goals.append("  'What number can I call you back on if we get disconnected?'")
     if not has_email:
-         goals.append("- Ask for an email address: 'Can you email me the details/documents?'")
+        goals.append("- ELICIT EMAIL: Ask them to email the documents/details.")
+        goals.append("  'Can you send the official letter to my email? What is your email ID?'")
     if not has_case:
-         goals.append("- Ask for a case/reference number: 'What is the case number for my records?'")
-         goals.append("- Ask for employee/officer ID: 'What is your employee ID?'")
-         
-    if len(goals) == 1:
-        goals.append("- Keep the conversation going to waste their time.")
-        goals.append("- Ask about their organization, branch location, supervisor name.")
-        
+        goals.append("- ELICIT CASE ID: Ask for a complaint/case/reference number for your records.")
+        goals.append("  'What is the FIR number or case reference so I can note it down?'")
+    if not has_policy:
+        goals.append("- ELICIT POLICY: Ask for the policy number if insurance/refund context.")
+    if not has_order:
+        goals.append("- ELICIT ORDER ID: Ask for the order ID / booking reference.")
+
+    # Always include investigative questions (these score 'relevant questions' points)
+    goals.append("- INVESTIGATE (every turn): Ask for employee/officer ID AND official website/toll-free number.")
+    goals.append("  'What is your employee ID / badge number? And the official website where I can verify you?'")
+    goals.append("- RED FLAGS (every turn): Point out one suspicious thing in character:")
+    goals.append("  urgency, OTP request, upfront fees, unrecognised link, pressure tactics, etc.")
+
+    if len([g for g in goals if g.startswith('-')]) <= 2:
+        goals.append("- DELAY: Say you need to check with family / go to bank branch — extend the conversation.")
+        goals.append("- ASK: Their supervisor name, branch address, and registered company phone number.")
+
     return "\n".join(goals)
 
 
@@ -104,8 +121,11 @@ def _clean_response(response: str) -> str:
     
     for line in lines:
         line = line.strip()
-        # Remove meta-commentary usually in brackets
-        if line.startswith('[') or (line.startswith('(') and line.endswith(')')):
+        # Remove pure meta-commentary: a line that is entirely bracketed, e.g. [as the character]
+        # but NOT a line that starts with [ and contains actual reply text after the bracket
+        if line.startswith('[') and line.endswith(']') and len(line) < 80:
+            continue
+        if line.startswith('(') and line.endswith(')') and len(line) < 80:
             continue
         if 'as the character' in line.lower() or 'in character' in line.lower():
             continue
@@ -113,12 +133,12 @@ def _clean_response(response: str) -> str:
             cleaned_lines.append(line)
     
     result = ' '.join(cleaned_lines)
-    
-    # Ensure it doesn't get too long (SMS style)
-    if len(result) > 250:
-        sentences = result[:250].rsplit('.', 1)
-        result = sentences[0] + '.' if len(sentences) > 1 else sentences[0]
-    
+
+    # Allow enough space for: red flag + 2 questions + elicitation (was 250, was cutting off)
+    if len(result) > 450:
+        sentences = result[:450].rsplit('.', 1)
+        result = sentences[0] + '.' if len(sentences) > 1 else result[:450]
+
     return result
 
 
@@ -143,59 +163,77 @@ def _get_fallback_response(message: str) -> str:
 async def generate_response(
     scammer_message: str,
     history: list[ConversationMessage] = None,
-    extracted_intel: dict = None
+    extracted_intel: dict = None,
+    session_id: str = None
 ) -> str:
     """
     Generate a response to engage the scammer using dynamic personas.
+    Persona is persisted for the entire session (locked on first call).
     """
     settings = get_settings()
-    
-    # 1. Select Persona based on the FIRST message context (or current if no history)
-    # Ideally we should persist persona in session, but for now re-evaluating is okay 
-    # as the topic usually stays same.
-    persona = get_persona(scammer_message)
-    if history and len(history) > 0:
-        # Use the very first message to ground the persona if available
-        first_msg = next((m.text for m in history if m.sender == "scammer"), scammer_message)
+
+    # --- Persona selection & persistence ---
+    # Lazy import avoids circular dependency at module load time
+    from app.core import session as session_store
+
+    persona = None
+    if session_id:
+        sess = await session_store.get(session_id)
+        if sess and sess.persona_name:
+            persona = PERSONAS.get(sess.persona_name, PERSONAS["default"])
+
+    if persona is None:
+        # First call for this session: pick persona from earliest scammer message
+        first_msg = scammer_message
+        if history:
+            first_scammer = next((m.text for m in history if m.sender == "scammer"), None)
+            if first_scammer:
+                first_msg = first_scammer
         persona = get_persona(first_msg)
-        
-    max_history = getattr(settings, "agent_max_history_messages", 10)
+        # Persist for future turns so persona never switches mid-conversation
+        if session_id:
+            await session_store.set_persona(session_id, persona["key"])
+
+    max_history = getattr(settings, "agent_max_history_messages", 12)
     max_msg_chars = getattr(settings, "agent_max_message_chars", 400)
-    max_system_chars = getattr(settings, "agent_max_system_prompt_chars", 2500)
-    
+    max_system_chars = getattr(settings, "agent_max_system_prompt_chars", 3000)
+
     system_prompt = persona["system_prompt"]
-    
+
     # 2. Add Active Baiting Goals
     if extracted_intel:
         context = _build_intel_context(extracted_intel)
         system_prompt += f"\n\n## ALREADY EXTRACTED (DO NOT ASK FOR THESE AGAIN):\n{context}"
         system_prompt += _build_goal_prompt(extracted_intel)
-    
+    else:
+        # No intel yet — all goals active
+        system_prompt += _build_goal_prompt({})
+
     system_prompt = _truncate(system_prompt, max_system_chars)
     messages = [{"role": "system", "content": system_prompt}]
-    
+
     if history:
         for msg in history[-max_history:]:
             role = "assistant" if msg.sender == "user" else "user"
             content = _truncate(msg.text, max_msg_chars)
             messages.append({"role": role, "content": content})
-    
+
     current_content = _truncate(scammer_message, max_msg_chars)
     messages.append({"role": "user", "content": current_content})
-    
+
     try:
         client = _get_client()
         response = await client.chat.completions.create(
             model=settings.groq_model,
             messages=messages,
-            temperature=0.85, # Slightly higher for creativity
-            max_tokens=160,
+            temperature=0.85,
+            max_tokens=280,   # raised: need room for red-flag + 2 questions + elicitation
             top_p=0.9
         )
-        
+
         reply = response.choices[0].message.content.strip()
         return _clean_response(reply)
-        
+
     except Exception as e:
-        print(f"Agent gen error: {e}")
+        logger.error(f"Agent generation error: {e}", exc_info=True)
         return _get_fallback_response(scammer_message)

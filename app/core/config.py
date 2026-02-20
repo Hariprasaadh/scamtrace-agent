@@ -14,18 +14,18 @@ class Settings(BaseSettings):
     groq_model: str = "llama-3.1-8b-instant"
     guvi_callback_url: str = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
     session_ttl_minutes: int = 30
-    rule_high_threshold: float = 0.8
-    rule_low_threshold: float = 0.3
-    ml_high_threshold: float = 0.6
-    ml_low_threshold: float = 0.4
+    rule_high_threshold: float = 0.75
+    rule_low_threshold: float = 0.2   
+    ml_high_threshold: float = 0.55
+    ml_low_threshold: float = 0.3  
     max_messages_without_intel: int = 5
     min_messages_for_callback: int = 3
-    max_conversation_messages: int = 7   # cap: after this many messages, send closing reply and final extraction
+    max_conversation_messages: int = 10  # cap: after 10 turns send final extraction 
     
     # LLM context limits (avoid token overflow from long history)
-    agent_max_history_messages: int = 10          # max conversation turns sent to honeypot LLM
+    agent_max_history_messages: int = 12          # max conversation turns sent to honeypot LLM
     agent_max_message_chars: int = 400            # truncate each history/current message to this
-    agent_max_system_prompt_chars: int = 2500    # cap system prompt (persona + intel + goals)
+    agent_max_system_prompt_chars: int = 3000    # cap system prompt (persona + intel + goals)
     llm_detector_max_history_messages: int = 5   # max turns sent to detection LLM
     llm_detector_max_message_chars: int = 300   # truncate each history message to this
     
