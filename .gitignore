@@ -27,10 +27,32 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+test_results.txt
+test_pytest_output.txt
+
+# Logs
+*.log
+logs/
 
 # OS
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*~
 
 # Jupyter
 .ipynb_checkpoints/
+
+# ML / Model artifacts
+*.pkl
+*.joblib
+*.h5
+*.onnx
+
+# Misc
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+pip-log.txt
