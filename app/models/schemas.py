@@ -185,6 +185,6 @@ class FinalResultPayload(BaseModel):
     totalMessagesExchanged: int
     engagementDurationSeconds: int = Field(default=0, description="Total engagement time in seconds")
     extractedIntelligence: dict = Field(..., description="Intelligence dict")
-    agentNotes: list[str] = Field(default_factory=list, description="Timestamped notes from the honeypot agent")
+    agentNotes: str = Field(default="", description="Summary notes from the honeypot agent")
     scamType: str = Field(default="unknown", description="Detected scam category")
     confidenceLevel: float = Field(default=0.0, ge=0.0, le=1.0, description="Detection confidence")

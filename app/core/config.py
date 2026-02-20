@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     ml_high_threshold: float = 0.55
     ml_low_threshold: float = 0.3  
     max_messages_without_intel: int = 5
-    min_messages_for_callback: int = 3
-    max_conversation_messages: int = 10  # cap: after 10 turns send final extraction 
+    min_messages_for_callback: int = 5   # send callback once ≥5 scam turns logged (guarantees callback even in short scenarios)
+    max_conversation_messages: int = 10  # keep LLM-engaged up to this many turns
     
     # LLM context limits (avoid token overflow from long history)
     agent_max_history_messages: int = 12          # max conversation turns sent to honeypot LLM

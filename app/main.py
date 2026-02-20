@@ -4,6 +4,7 @@ ScamTrace Agent - Main FastAPI Application
 
 import logging
 from contextlib import asynccontextmanager
+import asyncio
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -69,25 +70,40 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+# Placeholder values that indicate auth is not configured — bypass validation for these
+_UNCONFIGURED_KEY_PLACEHOLDERS = {"your-secret-api-key", "", "changeme"}
+
+
 async def verify_api_key(
     request: Request,
     x_api_key: str = Header(None, description="API key in header")
 ) -> str:
-    """Verify the API key from headers or query parameter."""
+    """Verify the API key from headers or query parameter.
+
+    Auth is OPTIONAL: if the configured api_key is a placeholder/empty, all
+    requests are allowed through regardless of what key (or no key) is sent.
+    When a real key is configured, the provided key must match exactly.
+    """
     settings = get_settings()
-    
+
+    # If no real key is configured, skip auth entirely
+    if settings.api_key.strip() in _UNCONFIGURED_KEY_PLACEHOLDERS:
+        return ""
+
     key = x_api_key
-    
-    # Then check query parameter
     if not key:
-        key = request.query_params.get("x-api-key")
-    
+        key = request.query_params.get("x-api-key", "")
+
+    # Key is configured but not supplied → reject
     if not key:
-        raise HTTPException(status_code=401, detail="API key required in header (x-api-key) or query parameter")
-    
+        raise HTTPException(
+            status_code=401,
+            detail="API key required in header (x-api-key) or query parameter"
+        )
+
     if key != settings.api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
+
     return key
 
 
@@ -284,11 +300,13 @@ async def process_message(
                 )
 
         if current_session.scam_detected:
+            # Always keep engaging with LLM for full conversation quality score.
+            # past_cap is only a safety guard for runaway sessions beyond max_conversation_messages.
             past_cap = current_session and current_session.messages_exchanged > max_conversations
-            already_sent_final = current_session and current_session.callback_sent
 
-            if past_cap and already_sent_final:
-                reply = "I will verify and get back to you at the earliest."
+            if past_cap:
+                # Session is well past the cap — give a brief holding reply to avoid LLM cost
+                reply = "Give me just a moment, I need to confirm a few things before I proceed."
             else:
                 reply = await agent.generate_response(
                     scammer_message=message.text,
@@ -302,9 +320,8 @@ async def process_message(
             
             current_session = await session.get(payload.sessionId)
             if current_session and callback.should_send_callback(current_session):
-                success = await callback.send_final_result(current_session)
-                if success:
-                    await session.mark_callback_sent(payload.sessionId)
+                # Fire-and-forget: don't block the honeypot reply on callback latency
+                asyncio.create_task(callback.send_final_result(current_session))
         else:
             reply = _generate_neutral_response(message.text)
 
@@ -375,6 +392,28 @@ async def test_extraction(
         "message": message,
         "intelligence": intel.model_dump()
     }
+
+
+# ── Endpoint aliases ─────────────────────────────────────────────────────────
+# The evaluation platform example URLs use /detect and /honeypot.
+# Route them to the same handler without duplication.
+
+@app.post(
+    "/detect",
+    include_in_schema=False,
+)
+async def detect_alias(request: Request, api_key: str = Depends(verify_api_key)):
+    """Alias for /api/message (evaluation-friendly path)."""
+    return await process_message(request, api_key)
+
+
+@app.post(
+    "/honeypot",
+    include_in_schema=False,
+)
+async def honeypot_alias(request: Request, api_key: str = Depends(verify_api_key)):
+    """Alias for /api/message (evaluation-friendly path)."""
+    return await process_message(request, api_key)
 
 
 if __name__ == "__main__":

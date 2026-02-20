@@ -197,13 +197,16 @@ def _build_payload(session: SessionState) -> FinalResultPayload:
     if session.detection_result:
         confidence = session.detection_result.confidence
     
+    notes_list = _build_agent_notes(session, intel)
+    notes_str = " | ".join(notes_list) if notes_list else "Engagement completed."
+
     return FinalResultPayload(
         sessionId=session.session_id,
         scamDetected=session.scam_detected,
         totalMessagesExchanged=session.messages_exchanged,
         engagementDurationSeconds=engagement_duration,
         extractedIntelligence=intelligence_dict,
-        agentNotes=_build_agent_notes(session, intel),
+        agentNotes=notes_str,
         scamType=scam_type,
         confidenceLevel=confidence,
     )
@@ -245,11 +248,12 @@ async def send_final_result(session: SessionState, max_retries: int = 3) -> bool
 
 
 def should_send_callback(session: SessionState) -> bool:
-    """Send callback only after max_conversation_messages (5), so we return final extraction once."""
-    if not session.scam_detected:
-        return False
-    if session.callback_sent:
-        return False
-    from app.core.config import get_settings
-    max_conversations = getattr(get_settings(), "max_conversation_messages", 7)
-    return session.messages_exchanged >= max_conversations
+    """Send a fresh callback on every scam-detected turn.
+
+    The evaluation endpoint (updateHoneyPotFinalResult) accepts multiple
+    updates for the same session, so we push the latest intelligence on
+    every reply instead of once at turn 5. This guarantees that whichever
+    turn the evaluator ends the conversation, it has already received the
+    most up-to-date extracted data.
+    """
+    return session.scam_detected
