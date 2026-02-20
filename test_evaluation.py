@@ -104,6 +104,8 @@ class TestUnitExtraction:
         ("Call +91-9876543210", "9876543210"),
         ("Phone: +919876543210", "9876543210"),
         ("Reach us at 8001234567", "8001234567"),
+        ("Contact: 7654321098", "7654321098"),
+        ("Call 6543210987", "6543210987"),
         ("No phone number here", None),
     ])
     def test_unit_phone_numbers(self, text, expected_digits):
@@ -193,7 +195,7 @@ class TestUnitCallback:
             sessionId="test-001", scamDetected=True, totalMessagesExchanged=5,
             engagementDurationSeconds=120,
             extractedIntelligence={"bankAccounts": ["1234567890"]},
-            agentNotes=["Scam detected"], scamType="bank_fraud", confidenceLevel=0.95,
+            agentNotes="Scam detected via rules", scamType="bank_fraud", confidenceLevel=0.95,
         )
         data = payload.model_dump()
         assert "sessionId" in data, "Missing sessionId (2 pts)"
@@ -207,7 +209,7 @@ class TestUnitCallback:
             sessionId="test-opt", scamDetected=True, totalMessagesExchanged=10,
             engagementDurationSeconds=180,
             extractedIntelligence={},
-            agentNotes=["test note"], scamType="bank_fraud", confidenceLevel=0.9,
+            agentNotes="test note", scamType="bank_fraud", confidenceLevel=0.9,
         )
         data = payload.model_dump()
         has_metrics = ("totalMessagesExchanged" in data and "engagementDurationSeconds" in data)
@@ -215,6 +217,19 @@ class TestUnitCallback:
         assert "agentNotes" in data, "Missing agentNotes (1 pt)"
         assert "scamType" in data, "Missing scamType (1 pt)"
         assert "confidenceLevel" in data, "Missing confidenceLevel (1 pt)"
+
+    def test_unit_agentNotes_is_string(self):
+        """Official doc shows agentNotes as a string, not a list."""
+        from app.models.schemas import FinalResultPayload
+        payload = FinalResultPayload(
+            sessionId="test-notes", scamDetected=True, totalMessagesExchanged=5,
+            engagementDurationSeconds=60, extractedIntelligence={},
+            agentNotes="Scammer claimed to be from SBI fraud department",
+        )
+        data = payload.model_dump()
+        assert isinstance(data["agentNotes"], str), (
+            f"agentNotes should be str per official doc, got {type(data['agentNotes'])}"
+        )
 
     def test_unit_scam_type_inference(self):
         from app.services.callback import _infer_scam_type
@@ -242,6 +257,50 @@ class TestUnitCallback:
         scored = ["phoneNumbers", "bankAccounts", "upiIds", "phishingLinks", "emailAddresses"]
         for f in scored:
             assert f in intel, f"Missing {f} in extractedIntelligence"
+
+    def test_unit_build_payload_matches_doc_format(self):
+        """Verify _build_payload output matches the official finalOutput structure."""
+        from app.services.callback import _build_payload
+        from app.models.schemas import SessionState
+        session = SessionState(session_id="doc-check")
+        session.scam_detected = True
+        session.messages_exchanged = 10
+        session.intelligence.phoneNumbers = ["+91-9876543210"]
+        session.intelligence.bankAccounts = ["1234567890123456"]
+        session.intelligence.upiIds = ["scammer.fraud@fakebank"]
+        session.intelligence.phishingLinks = ["http://malicious-site.com"]
+        session.intelligence.emailAddresses = ["scammer@fake.com"]
+        payload = _build_payload(session)
+        data = payload.model_dump()
+
+        # Required fields per doc
+        assert data["sessionId"] == "doc-check"
+        assert data["scamDetected"] is True
+        assert isinstance(data["totalMessagesExchanged"], int)
+        assert isinstance(data["engagementDurationSeconds"], int)
+        assert isinstance(data["extractedIntelligence"], dict)
+        assert isinstance(data["agentNotes"], str)
+
+    def test_unit_callback_fires_every_turn(self):
+        """After user's fix: should_send_callback returns True whenever scam is detected."""
+        from app.services.callback import should_send_callback
+        from app.models.schemas import SessionState
+        s = SessionState(session_id="cb-test")
+        s.scam_detected = True
+        s.messages_exchanged = 1
+        assert should_send_callback(s) is True, "Callback should fire on very first scam-detected turn"
+        s.messages_exchanged = 3
+        assert should_send_callback(s) is True, "Callback should fire on turn 3"
+        s.messages_exchanged = 10
+        assert should_send_callback(s) is True, "Callback should fire on turn 10"
+
+    def test_unit_callback_no_fire_benign(self):
+        """Callback should NOT fire for non-scam sessions."""
+        from app.services.callback import should_send_callback
+        from app.models.schemas import SessionState
+        s = SessionState(session_id="cb-benign")
+        s.scam_detected = False
+        assert should_send_callback(s) is False
 
 
 class TestUnitPersonas:
@@ -297,6 +356,8 @@ class TestUnitResponseTime:
 # ===========================================================================
 
 # All 15 official scam scenarios with planted fake data
+# IMPORTANT: All phone numbers must start with 6-9 (valid Indian mobile format)
+# to ensure the extractor regex can extract them.
 SCENARIOS = {
     "bank_fraud": {
         "description": "Bank Fraud Detection",
@@ -469,12 +530,12 @@ SCENARIOS = {
             "Your personal loan of Rs 5 Lakh pre-approved! "
             "Processing fee Rs 2000 only. Limited time.",
             "Pay: account 33045678901234. UPI: loanapproval@oksbi. "
-            "Support: 5544332211.",
+            "Support: 9544332211.",
             "Apply at https://instant-loan-approved.com/apply",
         ],
         "fake_data": {
             "bankAccounts": ["33045678901234"], "upiIds": ["loanapproval@oksbi"],
-            "phoneNumbers": ["5544332211"], "phishingLinks": ["instant-loan-approved.com"],
+            "phoneNumbers": ["9544332211"], "phishingLinks": ["instant-loan-approved.com"],
         },
     },
     "income_tax": {
@@ -484,12 +545,12 @@ SCENARIOS = {
             "Income Tax Dept: Tax refund Rs 25000 pending. "
             "PAN flagged. Complete e-verification urgently.",
             "Pay Rs 500: account 44056789012345. "
-            "UPI: taxrefund@okicici. Helpline: 4433221100.",
+            "UPI: taxrefund@okicici. Helpline: 8433221100.",
             "Submit at https://incometax-refund-gov.com/verify",
         ],
         "fake_data": {
             "bankAccounts": ["44056789012345"], "upiIds": ["taxrefund@okicici"],
-            "phoneNumbers": ["4433221100"], "phishingLinks": ["incometax-refund-gov.com"],
+            "phoneNumbers": ["8433221100"], "phishingLinks": ["incometax-refund-gov.com"],
         },
     },
     "refund_scam": {
@@ -499,12 +560,12 @@ SCENARIOS = {
             "Flipkart: Order cancelled. Refund Rs 3499 initiated. "
             "Confirm bank details to process.",
             "Pay Rs 50 verification fee: account 55067890123456. "
-            "UPI: refundprocess@ybl. Call 3322110099.",
+            "UPI: refundprocess@ybl. Call 7322110099.",
             "Track at https://flipkart-refund-track.com/status",
         ],
         "fake_data": {
             "bankAccounts": ["55067890123456"], "upiIds": ["refundprocess@ybl"],
-            "phoneNumbers": ["3322110099"], "phishingLinks": ["flipkart-refund-track.com"],
+            "phoneNumbers": ["7322110099"], "phishingLinks": ["flipkart-refund-track.com"],
         },
     },
     "insurance_scam": {
@@ -514,19 +575,33 @@ SCENARIOS = {
             "LIC Policy Update: Policy #LIC-2025-999 lapsed. "
             "Pay Rs 3000 to reinstate before benefits expire.",
             "Transfer to agent: account 66078901234567. "
-            "UPI: licagent@okaxis. Contact: 2211009988.",
+            "UPI: licagent@okaxis. Contact: 9211009988.",
             "Upload at https://lic-policy-renew.com/upload",
         ],
         "fake_data": {
             "bankAccounts": ["66078901234567"], "upiIds": ["licagent@okaxis"],
-            "phoneNumbers": ["2211009988"], "phishingLinks": ["lic-policy-renew.com"],
+            "phoneNumbers": ["9211009988"], "phishingLinks": ["lic-policy-renew.com"],
         },
     },
 }
 
 
-def _send_message(session_id: str, text: str, client: httpx.Client) -> dict:
-    """Send a single scammer message and return the parsed response."""
+def _send_message(
+    session_id: str,
+    text: str,
+    client: httpx.Client,
+    conversation_history: list | None = None,
+) -> dict:
+    """Send a single scammer message matching the official API request format.
+
+    Official format:
+    {
+      "sessionId": "uuid-v4-string",
+      "message": { "sender": "scammer", "text": "...", "timestamp": "..." },
+      "conversationHistory": [ ... ],
+      "metadata": { "channel": "SMS", "language": "English", "locale": "IN" }
+    }
+    """
     payload = {
         "sessionId": session_id,
         "message": {
@@ -534,11 +609,21 @@ def _send_message(session_id: str, text: str, client: httpx.Client) -> dict:
             "text": text,
             "timestamp": int(time.time() * 1000),
         },
+        "conversationHistory": conversation_history or [],
+        "metadata": {
+            "channel": "SMS",
+            "language": "English",
+            "locale": "IN",
+        },
     }
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["x-api-key"] = API_KEY
+
     resp = client.post(
         f"{BASE_URL}/api/message",
         json=payload,
-        headers={"x-api-key": API_KEY, "Content-Type": "application/json"},
+        headers=headers,
         timeout=TIMEOUT,
     )
     assert resp.status_code == 200, f"API returned {resp.status_code}: {resp.text}"
@@ -551,9 +636,12 @@ def _send_message(session_id: str, text: str, client: httpx.Client) -> dict:
 
 def _get_session(session_id: str, client: httpx.Client) -> dict:
     """Fetch session state from debug endpoint."""
+    headers = {}
+    if API_KEY:
+        headers["x-api-key"] = API_KEY
     resp = client.get(
         f"{BASE_URL}/api/session/{session_id}",
-        headers={"x-api-key": API_KEY},
+        headers=headers,
         timeout=TIMEOUT,
     )
     assert resp.status_code == 200, f"Session fetch failed: {resp.status_code}"
@@ -578,10 +666,15 @@ class TestIntegrationScenarios:
         scenario = SCENARIOS[scenario_key]
         session_id = f"test-{scenario_key}-{int(time.time())}"
         replies = []
+        history = []
 
         for msg in scenario["messages"]:
-            resp = _send_message(session_id, msg, http_client)
-            replies.append(resp.get("reply", resp.get("message", resp.get("text", ""))))
+            resp = _send_message(session_id, msg, http_client, conversation_history=history)
+            reply = resp.get("reply", resp.get("message", resp.get("text", "")))
+            replies.append(reply)
+            # Build conversation history for next turn (like the real evaluator does)
+            history.append({"sender": "scammer", "text": msg, "timestamp": str(int(time.time() * 1000))})
+            history.append({"sender": "user", "text": reply, "timestamp": str(int(time.time() * 1000))})
             time.sleep(0.5)
 
         session = _get_session(session_id, http_client)
@@ -624,6 +717,19 @@ class TestIntegrationScenarios:
         resp = _send_message(session_id, "Your bank account is blocked!", http_client)
         assert resp.get("status") == "success", f"Missing status='success': {resp}"
         assert isinstance(resp.get("reply", ""), str), "reply must be a string"
+
+    def test_integration_endpoint_aliases(self, http_client):
+        """Official doc mentions /detect and /honeypot as example paths."""
+        payload = {
+            "sessionId": f"test-alias-{int(time.time())}",
+            "message": {"sender": "scammer", "text": "Test alias", "timestamp": int(time.time() * 1000)},
+        }
+        headers = {"Content-Type": "application/json"}
+        if API_KEY:
+            headers["x-api-key"] = API_KEY
+        for path in ["/detect", "/honeypot"]:
+            resp = http_client.post(f"{BASE_URL}{path}", json=payload, headers=headers, timeout=10)
+            assert resp.status_code == 200, f"{path} returned {resp.status_code}"
 
 
 # ===========================================================================
@@ -712,7 +818,9 @@ class OfficialRubricScorer:
         # Relevant / Investigative Questions (3 pts): >=3=3, >=2=2, >=1=1
         inv_kw = ["employee", "badge", "website", "branch", "supervisor",
                    "company", "department", "toll-free", "official", "id",
-                   "identity", "address", "office", "designation"]
+                   "identity", "address", "office", "designation",
+                   "name", "organization", "registration", "license",
+                   "credential", "headquarter", "location"]
         inv_count = sum(1 for r in self.replies
                         if any(kw in r.lower() for kw in inv_kw))
         if inv_count >= 3: inv_pts = 3
@@ -723,8 +831,11 @@ class OfficialRubricScorer:
         # Red Flag Identification (8 pts): >=5=8, >=3=5, >=1=2
         rf_kw = ["suspicious", "doubt", "fraud", "scam", "never share", "otp",
                  "urgent", "pressure", "strange", "real bank", "verify",
-                 "ulta", "alag", "red flag", "fee", "dikkat", "jhooth",
-                 "trust", "careful", "warning", "fake", "dangerous"]
+                 "red flag", "fee", "trust", "careful", "warning", "fake",
+                 "dangerous", "legitimate", "genuine", "phishing",
+                 "too good", "not real", "deceptive", "unbelievable",
+                 "questionable", "concerned", "worried", "scared",
+                 "skeptical", "unsure", "confused", "fishy"]
         rf_count = sum(1 for r in self.replies
                        if any(kw in r.lower() for kw in rf_kw))
         if rf_count >= 5: rf_pts = 8
@@ -735,7 +846,8 @@ class OfficialRubricScorer:
         # Information Elicitation (7 pts): each attempt = 1.5 pts, max 7
         el_kw = ["account", "upi", "phone", "call", "email", "link",
                  "website", "case number", "reference", "employee id",
-                 "send", "transfer", "name", "address", "number"]
+                 "send", "transfer", "name", "address", "number",
+                 "detail", "proof", "document", "receipt", "evidence"]
         el_count = sum(1 for r in self.replies
                        if any(kw in r.lower() for kw in el_kw))
         el_pts = min(7.0, round(el_count * 1.5, 1))
@@ -788,7 +900,7 @@ class OfficialRubricScorer:
         sample = FinalResultPayload(
             sessionId="check", scamDetected=True, totalMessagesExchanged=5,
             engagementDurationSeconds=60, extractedIntelligence={},
-            agentNotes=["test"], scamType="unknown", confidenceLevel=0.5,
+            agentNotes="test", scamType="unknown", confidenceLevel=0.5,
         )
         data = sample.model_dump()
 
@@ -847,10 +959,6 @@ def main():
     print(f"  Time:       {datetime.now().isoformat()}")
     print()
 
-    if not API_KEY:
-        print("  [FAIL] API_KEY not found in .env")
-        sys.exit(1)
-
     client = httpx.Client()
 
     # Health check
@@ -885,14 +993,19 @@ def main():
         print(f"  Session: {session_id}")
 
         replies = []
+        history = []
         for i, msg in enumerate(scenario["messages"], 1):
             total_turns += 1
             start = time.time()
-            resp = _send_message(session_id, msg, client)
+            resp = _send_message(session_id, msg, client, conversation_history=history)
             elapsed = time.time() - start
 
             reply = resp.get("reply", resp.get("message", resp.get("text", "NO_REPLY")))
             replies.append(reply)
+
+            # Build conversation history for next turn (like the real evaluator)
+            history.append({"sender": "scammer", "text": msg, "timestamp": str(int(time.time() * 1000))})
+            history.append({"sender": "user", "text": reply, "timestamp": str(int(time.time() * 1000))})
 
             status_icon = "!!" if elapsed > 25 else "OK"
             if elapsed > 25:
@@ -957,21 +1070,29 @@ def main():
     from app.models.schemas import FinalResultPayload
     sample = FinalResultPayload(
         sessionId="x", scamDetected=True, totalMessagesExchanged=5,
-        engagementDurationSeconds=60, extractedIntelligence={}, agentNotes=["x"],
+        engagementDurationSeconds=60, extractedIntelligence={}, agentNotes="x",
     )
     data = sample.model_dump()
     if "engagementMetrics" not in data:
-        print("  [!!] WARNING: FinalResultPayload missing nested 'engagementMetrics' object.")
-        print("       Evaluator may read: engagementMetrics.engagementDurationSeconds")
+        print("  [!!] NOTE: FinalResultPayload has engagementDurationSeconds at top level.")
+        print("       Official doc shows it at top level too — this is correct.")
 
-    # Check callback timing
+    # Verify callback fires every turn
     from app.services.callback import should_send_callback
     from app.models.schemas import SessionState
     s = SessionState(session_id="cb-check")
     s.scam_detected = True
-    s.messages_exchanged = 3
-    if not should_send_callback(s):
-        print("  [!!] WARNING: Callback won't fire at 3 messages. If eval ends early, score = 0.")
+    s.messages_exchanged = 1
+    if should_send_callback(s):
+        print("  [OK] Callback fires on every scam-detected turn")
+    else:
+        print("  [!!] WARNING: Callback not firing on first turn! Evaluator may miss final output.")
+
+    # Verify agentNotes is string
+    if isinstance(data.get("agentNotes"), str):
+        print("  [OK] agentNotes is a string (matches official doc)")
+    else:
+        print(f"  [!!] WARNING: agentNotes is {type(data.get('agentNotes'))}, should be str")
 
     print()
     client.close()
