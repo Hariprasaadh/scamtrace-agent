@@ -101,6 +101,7 @@ class ResponsePayload(BaseModel):
     """API response with agent reply."""
     status: str = Field(default="success", description="Response status")
     reply: str = Field(..., description="Agent's response message")
+    extractedIntelligence: Optional[dict] = Field(default=None, description="Intelligence extracted from conversation so far")
 
 
 class ErrorResponse(BaseModel):

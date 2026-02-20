@@ -133,12 +133,25 @@ def _clean_response(response: str) -> str:
     
     result = ' '.join(cleaned_lines)
 
-    # Allow enough space for: red flag + 2 questions + elicitation (was 250, was cutting off)
-    if len(result) > 450:
-        sentences = result[:450].rsplit('.', 1)
-        result = sentences[0] + '.' if len(sentences) > 1 else result[:450]
+    # Keep replies concise: red flag + question + elicitation
+    if len(result) > 320:
+        sentences = result[:320].rsplit('.', 1)
+        result = sentences[0] + '.' if len(sentences) > 1 else result[:320]
 
     return result
+
+
+def _detect_language(text: str) -> str:
+    """Detect if scammer message is primarily English or Hinglish/Hindi."""
+    hindi_markers = {
+        'hai', 'hain', 'kya', 'aap', 'mera', 'tera', 'yeh', 'toh', 'accha',
+        'theek', 'nahi', 'kar', 'hua', 'hoga', 'bhi', 'aur', 'ya', 'se',
+        'ko', 'mein', 'ka', 'ki', 'ke', 'ji', 'sahib', 'bhai', 'didi',
+        'rupaye', 'paisa', 'bank', 'khata', 'paise', 'lakh', 'crore',
+    }
+    words = set(text.lower().split())
+    hindi_count = len(words & hindi_markers)
+    return 'hinglish' if hindi_count >= 2 else 'english'
 
 
 def _get_fallback_response(message: str) -> str:
@@ -197,6 +210,20 @@ async def generate_response(
 
     system_prompt = persona["system_prompt"]
 
+    # Mirror scammer's language so the reply sounds natural to them
+    lang = _detect_language(scammer_message)
+    if lang == 'english':
+        system_prompt += (
+            "\n\n## LANGUAGE RULE\n"
+            "The scammer is writing in English. "
+            "You MUST reply in plain English ONLY. Do NOT use any Hindi or Hinglish words."
+        )
+    else:
+        system_prompt += (
+            "\n\n## LANGUAGE RULE\n"
+            "Match the scammer's Hinglish style. Mix Hindi and English naturally."
+        )
+
     # 2. Add Active Baiting Goals
     if extracted_intel:
         context = _build_intel_context(extracted_intel)
@@ -224,7 +251,7 @@ async def generate_response(
             model=settings.groq_model,
             messages=messages,
             temperature=0.85,
-            max_tokens=280,   # raised: need room for red-flag + 2 questions + elicitation
+            max_tokens=220,   # concise: reaction + red-flag + 2 questions
             top_p=0.9
         )
 

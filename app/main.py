@@ -176,7 +176,8 @@ async def process_message(
         if not body or not body.get("message"):
             return ResponsePayload(
                 status="success",
-                reply="Hello! I received your message. How can I help you?"
+                reply="Hello! I received your message. How can I help you?",
+                extractedIntelligence=None
             )
         
         try:
@@ -306,8 +307,15 @@ async def process_message(
                     await session.mark_callback_sent(payload.sessionId)
         else:
             reply = _generate_neutral_response(message.text)
-        
-        return ResponsePayload(status="success", reply=reply)
+
+        # Attach extracted intelligence to every response so callers can see it immediately
+        intel_dict = None
+        if current_session and current_session.scam_detected:
+            current_session = await session.get(payload.sessionId)
+            if current_session and not current_session.intelligence.is_empty():
+                intel_dict = current_session.intelligence.model_dump()
+
+        return ResponsePayload(status="success", reply=reply, extractedIntelligence=intel_dict)
     
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
