@@ -80,7 +80,6 @@ def _build_goal_prompt(intel: dict) -> str:
     if not has_order:
         goals.append("- ELICIT ORDER ID: Ask for the order ID / booking reference.")
 
-    # Always include investigative questions (these score 'relevant questions' points)
     goals.append("- INVESTIGATE (every turn): Ask for employee/officer ID AND official website/toll-free number.")
     goals.append("  'What is your employee ID / badge number? And the official website where I can verify you?'")
     goals.append("- RED FLAGS (every turn): Point out one suspicious thing in character:")
@@ -172,8 +171,6 @@ async def generate_response(
     """
     settings = get_settings()
 
-    # --- Persona selection & persistence ---
-    # Lazy import avoids circular dependency at module load time
     from app.core import session as session_store
 
     persona = None

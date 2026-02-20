@@ -76,7 +76,6 @@ async def verify_api_key(
     """Verify the API key from headers or query parameter."""
     settings = get_settings()
     
-    # Check header first
     key = x_api_key
     
     # Then check query parameter
@@ -169,24 +168,20 @@ async def process_message(
     Detects scam intent, engages with honeypot agent, extracts intelligence.
     """
     try:
-        # Parse request body flexibly
         try:
             body = await request.json()
         except:
             body = {}
         
-        # Handle empty or test requests
         if not body or not body.get("message"):
             return ResponsePayload(
                 status="success",
                 reply="Hello! I received your message. How can I help you?"
             )
         
-        # Parse into our model
         try:
             payload = RequestPayload(**body)
         except Exception as e:
-            # If parsing fails, create minimal payload
             payload = RequestPayload(
                 sessionId=body.get("sessionId", "default-session"),
                 message=None,
@@ -202,7 +197,6 @@ async def process_message(
         
         message = payload.get_message()
         
-        # Override with raw body if available
         if body.get("message", {}).get("text"):
             from app.models import MessageInput
             message = MessageInput(
@@ -217,7 +211,6 @@ async def process_message(
         
         # Scam Detection
         if not current_session.scam_detected:
-            # Use server-side history as well (richer context than client-provided)
             server_history = [
                 {"sender": m.sender, "text": m.text}
                 for m in (current_session.conversation_history or [])
@@ -231,7 +224,6 @@ async def process_message(
                 accumulated_indicators=current_session.accumulated_indicators
             )
 
-            # Always update accumulated score so cross-turn signals build up
             await session.update_accumulated_score(
                 payload.sessionId,
                 detection_result.confidence if not detection_result.is_scam else 0.0,
@@ -254,12 +246,8 @@ async def process_message(
                     f"Scam detected via {detection_result.tier} (conf: {detection_result.confidence:.2f})"
                 )
         
-        # Shared conversation history reference (used by extraction AND response generation)
         history = (current_session.conversation_history or []) if current_session else []
 
-        # IOC-based force detection — runs whenever scam not yet confirmed.
-        # Any hard artefact (UPI/bank/link/phone) in a message is itself proof of an
-        # active scam regardless of tier scores.
         if not current_session.scam_detected:
             quick_intel = extractor.extract_from_message(message.text)
             _ioc_found = (
@@ -285,7 +273,6 @@ async def process_message(
                     f"phone={bool(quick_intel.phoneNumbers)})"
                 )
 
-        # Extract intelligence from full conversation whenever scam is confirmed
         if current_session.scam_detected:
             intel = extractor.extract_from_conversation(history, message.text)
             if not intel.is_empty():
@@ -295,10 +282,7 @@ async def process_message(
                     f"Extracted: {_summarize_intel(intel)}"
                 )
 
-        # Generate Response
         if current_session.scam_detected:
-            # past_cap = turns BEYOND the cap (turn 11+). Turn 10 itself still gets a full
-            # LLM response so it contributes questions, red-flags and elicitation to scoring.
             past_cap = current_session and current_session.messages_exchanged > max_conversations
             already_sent_final = current_session and current_session.callback_sent
 

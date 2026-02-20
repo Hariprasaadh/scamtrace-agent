@@ -42,11 +42,9 @@ def _build_agent_notes(session: SessionState, intel: ExtractedIntelligence) -> l
     """
     notes: list[str] = []
 
-    # --- Section 1: per-turn operational timeline from session.agent_notes ---
     for raw_note in (session.agent_notes or []):
         notes.append(raw_note)
 
-    # Include LLM detection reasoning if available
     if session.detection_result:
         dr = session.detection_result
         notes.append(
@@ -54,7 +52,6 @@ def _build_agent_notes(session: SessionState, intel: ExtractedIntelligence) -> l
             f"confidence={dr.confidence:.2f} indicators={dr.indicators}"
         )
 
-    # --- Section 2: tactic analysis ---
     if session.detection_result and session.detection_result.indicators:
         ind = session.detection_result.indicators
         if any("urgency" in i for i in ind) or any("urgent" in i.lower() for i in ind):
@@ -68,7 +65,6 @@ def _build_agent_notes(session: SessionState, intel: ExtractedIntelligence) -> l
         if any("fee" in i for i in ind):
             notes.append("[Tactic] Advance fee / processing fee demanded.")
 
-    # --- Section 3: extracted intelligence summary ---
     if intel.phishingLinks:
         notes.append("[Intel] Phishing link(s): " + "; ".join(intel.phishingLinks[:5]))
     if intel.upiIds:
@@ -104,7 +100,6 @@ def _intel_for_callback(session: SessionState) -> ExtractedIntelligence:
     history = getattr(session, "conversation_history", None) or []
     if not history:
         return base
-    # Final sweep: extract from all scammer messages again and merge
     combined = extract_from_conversation(history, None)
     base.merge(combined)
     return base
@@ -121,11 +116,9 @@ def _infer_scam_type(session: SessionState) -> str:
     if session.detection_result and session.detection_result.indicators:
         indicators_text = " ".join(session.detection_result.indicators).lower()
 
-    # Include accumulated indicators from multi-turn scoring
     if session.accumulated_indicators:
         indicators_text += " " + " ".join(session.accumulated_indicators).lower()
 
-    # Scan all scammer messages for richer context
     history_text = ""
     for msg in (session.conversation_history or []):
         if msg.sender == "scammer":
@@ -134,7 +127,6 @@ def _infer_scam_type(session: SessionState) -> str:
     combined = indicators_text + " " + history_text
     intel = session.intelligence
 
-    # --- Hard IOC evidence first (highest confidence) ---
     if intel.phishingLinks:
         return "phishing"
     if intel.upiIds:
@@ -142,7 +134,6 @@ def _infer_scam_type(session: SessionState) -> str:
     if intel.bankAccounts:
         return "bank_fraud"
 
-    # --- Keyword matching on combined text ---
     if any(kw in combined for kw in ['upi', 'gpay', 'phonepe', 'paytm', 'cashback', 'upi_request', 'scanner', 'qr code']):
         return "upi_fraud"
 
@@ -189,8 +180,7 @@ def _compute_engagement_duration(session: SessionState) -> int:
 def _build_payload(session: SessionState) -> FinalResultPayload:
     """Build the callback payload from session state."""
     intel = _intel_for_callback(session)
-    intelligence_dict = {
-        "bankAccounts": intel.bankAccounts,
+    intelligence_dict = {        "bankAccounts": intel.bankAccounts,
         "upiIds": intel.upiIds,
         "phishingLinks": intel.phishingLinks,
         "phoneNumbers": intel.phoneNumbers,
@@ -201,7 +191,6 @@ def _build_payload(session: SessionState) -> FinalResultPayload:
         "orderNumbers": intel.orderNumbers,
     }
     
-    # Compute engagement metrics
     engagement_duration = _compute_engagement_duration(session)
     scam_type = _infer_scam_type(session)
     confidence = 0.0
