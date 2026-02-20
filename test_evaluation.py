@@ -994,7 +994,15 @@ def main():
 
         replies = []
         history = []
-        for i, msg in enumerate(scenario["messages"], 1):
+        extended_messages = list(scenario["messages"])
+        extended_messages.extend([
+            "Why are you asking so many questions? Just do what I said.",
+            "Hurry up, I don't have all day to wait for you.",
+            "If you don't do this immediately, you will be in big trouble.",
+            "Are you doing it or not? Stop wasting time.",
+            "Send me the confirmation immediately."
+        ])
+        for i, msg in enumerate(extended_messages, 1):
             total_turns += 1
             start = time.time()
             resp = _send_message(session_id, msg, client, conversation_history=history)
@@ -1100,5 +1108,34 @@ def main():
 
 
 if __name__ == "__main__":
-    score = main()
+    import io
+    
+    # Capture the output to write to file
+    class TeeHelper:
+        def __init__(self, stream1, stream2):
+            self.stream1 = stream1
+            self.stream2 = stream2
+            
+        def write(self, data):
+            self.stream1.write(data)
+            self.stream2.write(data)
+            self.stream1.flush()
+            self.stream2.flush()
+            
+        def flush(self):
+            self.stream1.flush()
+            self.stream2.flush()
+
+    import os
+    os.makedirs("test_result", exist_ok=True)
+    
+    # Setup Tee
+    original_stdout = sys.stdout
+    with open(os.path.join("test_result", "test_results_latest.txt"), "w", encoding="utf-8") as f:
+        sys.stdout = TeeHelper(original_stdout, f)
+        try:
+            score = main()
+        finally:
+            sys.stdout = original_stdout
+            
     sys.exit(0 if score >= 70 else 1)

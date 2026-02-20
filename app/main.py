@@ -306,7 +306,7 @@ async def process_message(
 
             if past_cap:
                 # Session is well past the cap — give a brief holding reply to avoid LLM cost
-                reply = "Give me just a moment, I need to confirm a few things before I proceed."
+                reply = "I'm feeling worried and confused about this — it seems suspicious. Can you give me your employee ID and official website so I can verify this is legitimate?"
             else:
                 reply = await agent.generate_response(
                     scammer_message=message.text,
