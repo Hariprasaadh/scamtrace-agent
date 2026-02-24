@@ -182,38 +182,20 @@ Intelligence is extracted from **all messages** (scammer + agent quotes) and acc
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     API Layer (FastAPI)                      │
-│            POST /api/message  /detect  /honeypot             │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  3-Tier Scam Detection                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │ Tier 1:     │  │ Tier 2:     │  │ Tier 3:     │         │
-│  │ Rules       │──▶│ ML (TF-IDF) │──▶│ LLM (Groq)  │         │
-│  │ ~70% msgs   │  │ ~20% msgs   │  │ ~10% msgs   │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-│                          + IOC Fallback                      │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Honeypot Agent (if scam detected)               │
-│  • Dynamic victim persona selection                          │
-│  • LLM-powered natural conversation (Groq)                   │
-│  • 8-type intelligence extraction (regex)                    │
-│  • Multi-turn context tracking                               │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│              GUVI Callback (fire-and-forget)                  │
-│  Pushes latest finalOutput on every scam-detected turn       │
-└─────────────────────────────────────────────────────────────┘
-```
+![ScamTrace Agent — System Architecture](architecture-diagram.png)
+
+The diagram above shows the full request lifecycle:
+
+1. **Mock Scammer API** sends a POST request → passes through **API Key Auth** → hits the **Session Manager** (in-memory store with TTL).
+2. An **IOC Direct Match** check runs first — if a hard artefact (UPI ID, bank account, phishing link, phone) is found, the message is immediately force-flagged as scam.
+3. Otherwise the message flows through the **4-Tier Detection Pipeline**:
+   - **Tier 0** — Accumulated cross-turn score check (≥ 0.75 → scam)
+   - **Tier 1** — Rule Engine (keyword categories + regex patterns)
+   - **Tier 2** — ML Classifier (TF-IDF + Logistic Regression)
+   - **Tier 3** — LLM Detector (Groq LLaMA-3.1-8B, only on ambiguous cases)
+4. On a scam verdict, the **Intelligence Extractor** runs regex over the full conversation to pull all 8 IOC types into the session state.
+5. The **Honeypot Agent** (Groq Cloud API) generates a reply using a session-locked **Persona** (Elderly Victim, Desperate Youth, or Tech-Illiterate).
+6. After 5+ scam turns, the **GUVI Callback Service** fires an async POST to the evaluation endpoint with the full intel report.
 
 ## Project Structure
 
